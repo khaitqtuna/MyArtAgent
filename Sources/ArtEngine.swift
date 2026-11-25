@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import UIKit
+import MLX
 import StableDiffusion
 
 enum ArtStyle: String, CaseIterable, Identifiable {
@@ -104,9 +105,13 @@ final class ArtEngine: ObservableObject {
         generator!.ensureLoaded()
         var latents = Optional(generator!.generateLatents(parameters: params))
         var current = latents?.next() ?? nil
+        if let first = current {
+            eval(first)
+        }
         var currentStep = 1
 
         while let next = (latents?.next() ?? nil) {
+            eval(next)
             current = next
             currentStep += 1
             let stepCopy = currentStep
@@ -133,6 +138,71 @@ final class ArtEngine: ObservableObject {
         }
 
         let decoded = decoder(finalXt)
-        return StableDiffusion.Image(decoded).asCGImage()
+        return try makeCGImage(from: decoded)
+    }
+
+    private nonisolated func makeCGImage(from array: MLXArray) throws -> CGImage {
+        let imageArray = array.ndim == 4 ? array[0] : array
+        guard imageArray.ndim == 3 else {
+            throw NSError(
+                domain: "ArtEngine",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Định dạng dữ liệu ảnh không hợp lệ: \(imageArray.shape)"]
+            )
+        }
+
+        let height = imageArray.shape[0]
+        let width = imageArray.shape[1]
+        let channels = imageArray.shape[2]
+
+        let floats = imageArray.asType(.float32).asArray(Float.self)
+        let maxValue = floats.lazy.filter(\.isFinite).max() ?? 1.0
+        let scale: Float = maxValue <= 1.5 ? 255.0 : 1.0
+
+        func toByte(_ value: Float) -> UInt8 {
+            guard value.isFinite else { return 0 }
+            return UInt8(min(max(value * scale, 0), 255))
+        }
+
+        var rgba = [UInt8](repeating: 255, count: width * height * 4)
+        for i in 0 ..< (width * height) {
+            let src = i * channels
+            let dst = i * 4
+            if channels >= 3 {
+                rgba[dst] = toByte(floats[src])
+                rgba[dst + 1] = toByte(floats[src + 1])
+                rgba[dst + 2] = toByte(floats[src + 2])
+            } else {
+                let gray = toByte(floats[src])
+                rgba[dst] = gray
+                rgba[dst + 1] = gray
+                rgba[dst + 2] = gray
+            }
+        }
+
+        let data = Data(rgba)
+        guard let provider = CGDataProvider(data: data as CFData),
+              let cgImage = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: true,
+                  intent: .defaultIntent
+              )
+        else {
+            throw NSError(
+                domain: "ArtEngine",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Không thể dựng ảnh CGImage từ dữ liệu AI."]
+            )
+        }
+
+        return cgImage
     }
 }
