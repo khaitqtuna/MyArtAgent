@@ -34,57 +34,27 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
 @MainActor
 final class ArtEngine: ObservableObject {
-    @Published var statusMessage: String = "Sẵn sàng nhận ý tưởng vẽ tranh."
-    @Published var expandedPrompt: String = ""
+    @Published var statusMessage: String = "Sẵn sàng nhận mô tả tranh."
     @Published var downloadProgress: Double = 0
     @Published var isGenerating: Bool = false
     @Published var generatedImage: UIImage?
 
-    func generateImage(
-        idea: String,
-        style: ArtStyle,
-        steps: Int,
-        useAgent: Bool,
-        llmModelId: String
-    ) {
-        let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
+    func generateImage(prompt: String, style: ArtStyle, steps: Int) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
         isGenerating = true
         downloadProgress = 0
-        expandedPrompt = ""
         UIApplication.shared.isIdleTimerDisabled = true
-        statusMessage = useAgent
-            ? "Đang khởi động Não AI Agent..."
-            : "Đang chuẩn bị model vẽ tranh..."
+        statusMessage = "Đang kiểm tra model AI..."
+
+        let fullPrompt = trimmed + style.promptSuffix
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                let basePrompt: String
-                if useAgent {
-                    basePrompt = try await PromptAgent.expandPrompt(
-                        userIdea: trimmed,
-                        styleName: style.rawValue,
-                        modelId: llmModelId
-                    ) { status in
-                        Task { @MainActor [weak self] in
-                            self?.statusMessage = status
-                        }
-                    }
-
-                    await MainActor.run {
-                        self.expandedPrompt = basePrompt
-                        self.statusMessage = "Đã viết xong prompt! Đang chuyển sang GPU vẽ tranh..."
-                    }
-                } else {
-                    basePrompt = trimmed
-                }
-
-                let fullPrompt = basePrompt + style.promptSuffix
-                let cgImage = try await self.runDiffusionPipeline(fullPrompt: fullPrompt, steps: steps)
+                let cgImage = try await self.runPipeline(fullPrompt: fullPrompt, steps: steps)
                 let uiImage = UIImage(cgImage: cgImage)
-
                 await MainActor.run {
                     self.generatedImage = uiImage
                     self.statusMessage = "Đã vẽ xong!"
@@ -102,7 +72,11 @@ final class ArtEngine: ObservableObject {
         }
     }
 
-    private nonisolated func runDiffusionPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
+    private nonisolated func runPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
+        // Ép giới hạn cache GPU xuống 20 MB để tránh bị iPadOS Jetsam kill app
+        Memory.cacheLimit = 20 * 1024 * 1024
+        Memory.clearCache()
+
         let config = StableDiffusionConfiguration.presetSDXLTurbo
         let loadConfig = LoadConfiguration(float16: true, quantize: true)
 
@@ -112,13 +86,13 @@ final class ArtEngine: ObservableObject {
                 self?.downloadProgress = fraction
                 let percent = Int(fraction * 100)
                 if percent < 100 {
-                    self?.statusMessage = "Đang kiểm tra / tải model vẽ: \(percent)%"
+                    self?.statusMessage = "Đang tải model về iPad: \(percent)%"
                 }
             }
         }
 
         await MainActor.run {
-            self.statusMessage = "Đang khởi động GPU M5 và vẽ tranh..."
+            self.statusMessage = "Đang nạp model ở chế độ tiết kiệm RAM..."
         }
 
         var params = config.defaultParameters()
@@ -135,16 +109,22 @@ final class ArtEngine: ObservableObject {
             )
         }
 
-        generator!.ensureLoaded()
+        // Không gọi ensureLoaded() để tránh nạp cùng lúc toàn bộ 4 mạng nơ-ron vào RAM
+        await MainActor.run {
+            self.statusMessage = "Đang vẽ bước 1/\(steps)..."
+        }
+
         var latents = Optional(generator!.generateLatents(parameters: params))
         var current = latents?.next() ?? nil
         if let first = current {
             eval(first)
+            Memory.clearCache()
         }
         var currentStep = 1
 
         while let next = (latents?.next() ?? nil) {
             eval(next)
+            Memory.clearCache()
             current = next
             currentStep += 1
             let stepCopy = currentStep
@@ -154,6 +134,7 @@ final class ArtEngine: ObservableObject {
         }
 
         let decoder = generator!.detachedDecoder()
+        // Giải phóng hoàn toàn UNet và TextEncoder trước khi giải mã ảnh
         latents = nil
         generator = nil
         Memory.clearCache()
@@ -171,6 +152,7 @@ final class ArtEngine: ObservableObject {
         }
 
         let decoded = decoder(finalXt)
+        eval(decoded)
         let cgImage = try makeCGImage(from: decoded)
         Memory.clearCache()
         return cgImage
