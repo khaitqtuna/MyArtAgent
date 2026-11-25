@@ -12,9 +12,11 @@ struct MyArtAgentApp: App {
 
 struct ContentView: View {
     @StateObject private var engine = ArtEngine()
-    @State private var promptText: String = ""
+    @State private var ideaText: String = ""
     @State private var selectedStyle: ArtStyle = .anime
     @State private var steps: Int = 4
+    @State private var useAgent: Bool = true
+    @State private var llmModelId: String = PromptAgent.defaultModelId
     @State private var savedNotice: String = ""
 
     var body: some View {
@@ -22,17 +24,41 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Mô tả tranh (nên nhập tiếng Anh ở bước này):")
+                        Text(useAgent
+                             ? "Nhập ý tưởng tranh (tiếng Việt hay tiếng Anh đều được):"
+                             : "Nhập thẳng Prompt tiếng Anh (Direct Mode):")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         TextField(
-                            "VD: A cat astronaut floating in nebula, glowing stars",
-                            text: $promptText,
+                            useAgent
+                                ? "VD: Một quán mì nhỏ ấm cúng giữa đêm mưa ở Tokyo"
+                                : "VD: A cozy ramen shop at night in the rain, warm glow",
+                            text: $ideaText,
                             axis: .vertical
                         )
                         .lineLimit(3...6)
                         .textFieldStyle(.roundedBorder)
+                    }
+
+                    Toggle("Bật Não AI Agent (tự dịch & viết prompt)", isOn: $useAgent)
+
+                    if useAgent {
+                        DisclosureGroup("Tùy chỉnh model Não AI (Hugging Face)") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                TextField("Hugging Face MLX Model ID", text: $llmModelId)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.caption)
+
+                                Text("Mặc định dùng Qwen2.5-3B (4-bit, ~1.8 GB). Có thể đổi sang bất kỳ model MLX 4-bit nào khác trên Hugging Face.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 6)
+                        }
+                        .font(.subheadline)
                     }
 
                     HStack {
@@ -51,17 +77,19 @@ struct ContentView: View {
                     Button {
                         savedNotice = ""
                         engine.generateImage(
-                            prompt: promptText,
+                            idea: ideaText,
                             style: selectedStyle,
-                            steps: steps
+                            steps: steps,
+                            useAgent: useAgent,
+                            llmModelId: llmModelId
                         )
                     } label: {
-                        Text(engine.isGenerating ? "Đang xử lý..." : "Tạo tranh bằng AI")
+                        Text(engine.isGenerating ? "Đang xử lý..." : "Tạo tranh bằng AI Agent")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(engine.isGenerating || promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(engine.isGenerating || ideaText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     if engine.isGenerating {
                         if engine.downloadProgress > 0 && engine.downloadProgress < 1 {
@@ -75,6 +103,22 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+
+                    if !engine.expandedPrompt.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Prompt tiếng Anh do Agent viết:")
+                                .font(.caption)
+                                .bold()
+                                .foregroundStyle(.secondary)
+                            Text(engine.expandedPrompt)
+                                .font(.footnote)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
 
                     if let image = engine.generatedImage {
                         Image(uiImage: image)
