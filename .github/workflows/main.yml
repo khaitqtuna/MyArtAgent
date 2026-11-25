@@ -12,6 +12,12 @@ jobs:
       - name: Tai code ve may Mac ao
         uses: actions/checkout@v4
 
+      - name: Tai va sua loi phien ban iOS cho thu vien AI
+        run: |
+          git clone --depth 1 https://github.com/ml-explore/mlx-swift-examples.git
+          python3 -c 'import re, pathlib; p = pathlib.Path("mlx-swift-examples/Package.swift"); p.write_text(re.sub(r"\.iOS\([^)]+\)", ".iOS(.v17)", p.read_text()))'
+          grep -n "iOS" mlx-swift-examples/Package.swift || true
+
       - name: Cai dat XcodeGen
         run: brew install xcodegen
 
@@ -29,7 +35,7 @@ jobs:
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGNING_IDENTITY=""
 
       - name: Dong goi thanh file IPA
         run: |
