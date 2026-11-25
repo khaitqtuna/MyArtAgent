@@ -4,6 +4,9 @@ options:
 packages:
   MLXSwiftExamples:
     path: mlx-swift-examples
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: "2.25.0"
 targets:
   MyArtAgent:
     type: application
@@ -16,6 +19,10 @@ targets:
     dependencies:
       - package: MLXSwiftExamples
         product: StableDiffusion
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
     info:
       path: Info.plist
       properties:
