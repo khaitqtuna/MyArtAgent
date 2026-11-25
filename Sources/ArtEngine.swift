@@ -84,7 +84,7 @@ final class ArtEngine: ObservableObject {
                     }
 
                     generator.ensureLoaded()
-                    let latents = generator.generateLatents(parameters: params)
+                    var latents = generator.generateLatents(parameters: params)
                     var current = latents.next()
                     var currentStep = 1
 
