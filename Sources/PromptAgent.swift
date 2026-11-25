@@ -22,6 +22,11 @@ struct PromptAgent {
         Output ONLY the final English prompt text. Do not include explanations, labels, or quotation marks.
         """
 
+        // Ép giới hạn cache GPU xuống 20 MB và dọn sạch trước khi nạp LLM
+        Memory.cacheLimit = 20 * 1024 * 1024
+        Memory.clearCache()
+        defer { Memory.clearCache() }
+
         let config = ModelConfiguration(id: targetModel)
         var container: ModelContainer? = try await LLMModelFactory.shared.loadContainer(
             configuration: config

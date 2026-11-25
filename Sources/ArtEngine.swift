@@ -34,25 +34,55 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
 @MainActor
 final class ArtEngine: ObservableObject {
-    @Published var statusMessage: String = "Sẵn sàng nhận mô tả tranh."
+    @Published var statusMessage: String = "Sẵn sàng nhận ý tưởng vẽ tranh."
+    @Published var expandedPrompt: String = ""
     @Published var downloadProgress: Double = 0
     @Published var isGenerating: Bool = false
     @Published var generatedImage: UIImage?
 
-    func generateImage(prompt: String, style: ArtStyle, steps: Int) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    func generateImage(
+        idea: String,
+        style: ArtStyle,
+        steps: Int,
+        useAgent: Bool,
+        llmModelId: String
+    ) {
+        let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
         isGenerating = true
         downloadProgress = 0
+        expandedPrompt = ""
         UIApplication.shared.isIdleTimerDisabled = true
-        statusMessage = "Đang kiểm tra model AI..."
-
-        let fullPrompt = trimmed + style.promptSuffix
+        statusMessage = useAgent
+            ? "Đang khởi động Não AI Agent..."
+            : "Đang kiểm tra model AI..."
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
+                let basePrompt: String
+                if useAgent {
+                    basePrompt = try await PromptAgent.expandPrompt(
+                        userIdea: trimmed,
+                        styleName: style.rawValue,
+                        modelId: llmModelId
+                    ) { status in
+                        Task { @MainActor [weak self] in
+                            self?.statusMessage = status
+                        }
+                    }
+
+                    await MainActor.run {
+                        self.expandedPrompt = basePrompt
+                        self.downloadProgress = 0
+                        self.statusMessage = "Đã viết xong prompt! Đang chuyển sang GPU vẽ tranh..."
+                    }
+                } else {
+                    basePrompt = trimmed
+                }
+
+                let fullPrompt = basePrompt + style.promptSuffix
                 let cgImage = try await self.runPipeline(fullPrompt: fullPrompt, steps: steps)
                 let uiImage = UIImage(cgImage: cgImage)
                 await MainActor.run {
@@ -76,6 +106,7 @@ final class ArtEngine: ObservableObject {
         // Ép giới hạn cache GPU xuống 20 MB để tránh bị iPadOS Jetsam kill app
         Memory.cacheLimit = 20 * 1024 * 1024
         Memory.clearCache()
+        defer { Memory.clearCache() }
 
         let config = StableDiffusionConfiguration.presetSDXLTurbo
         let loadConfig = LoadConfiguration(float16: true, quantize: true)

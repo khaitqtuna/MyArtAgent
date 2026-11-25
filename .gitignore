@@ -1,0 +1,6 @@
+dist/
+last_build_error.log
+build/
+mlx-swift-examples/
+*.ipa
+*.xcodeproj

@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-latest
@@ -16,7 +20,14 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ml-explore/mlx-swift-examples.git
           python3 -c 'import re, pathlib; p = pathlib.Path("mlx-swift-examples/Package.swift"); p.write_text(re.sub(r"\.iOS\([^)]+\)", ".iOS(.v17)", p.read_text()))'
-          grep -n "iOS" mlx-swift-examples/Package.swift || true
+
+      - name: Cache thu vien Swift Packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ hashFiles('project.yml', 'mlx-swift-examples/Package.swift') }}
+          restore-keys: |
+            spm-
 
       - name: Cai dat XcodeGen
         run: brew install xcodegen
