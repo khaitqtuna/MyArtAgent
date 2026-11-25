@@ -1,0 +1,21 @@
+name: MyArtAgent
+options:
+  bundleIdPrefix: com.local.artagent
+targets:
+  MyArtAgent:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Sources
+    entitlements:
+      path: MyArtAgent.entitlements
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSPhotoLibraryAddUsageDescription: "Cho phep luu tranh AI vao thu vien anh."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.artagent.MyArtAgent
+        TARGETED_DEVICE_FAMILY: "1,2"
