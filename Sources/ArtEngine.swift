@@ -34,52 +34,85 @@ enum ArtStyle: String, CaseIterable, Identifiable {
 
 @MainActor
 final class ArtEngine: ObservableObject {
-    @Published var statusMessage: String = "Sẵn sàng nhận mô tả tranh."
+    @Published var statusMessage: String = "Sẵn sàng nhận ý tưởng vẽ tranh."
+    @Published var expandedPrompt: String = ""
     @Published var downloadProgress: Double = 0
     @Published var isGenerating: Bool = false
     @Published var generatedImage: UIImage?
 
-    func generateImage(prompt: String, style: ArtStyle, steps: Int) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    func generateImage(
+        idea: String,
+        style: ArtStyle,
+        steps: Int,
+        useAgent: Bool,
+        llmModelId: String
+    ) {
+        let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
         isGenerating = true
         downloadProgress = 0
-        statusMessage = "Đang kiểm tra / tải model AI (lần đầu cần Wi-Fi)..."
-
-        let fullPrompt = trimmed + style.promptSuffix
+        expandedPrompt = ""
+        UIApplication.shared.isIdleTimerDisabled = true
+        statusMessage = useAgent
+            ? "Đang khởi động Não AI Agent..."
+            : "Đang chuẩn bị model vẽ tranh..."
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                let cgImage = try await self.runPipeline(fullPrompt: fullPrompt, steps: steps)
+                let basePrompt: String
+                if useAgent {
+                    basePrompt = try await PromptAgent.expandPrompt(
+                        userIdea: trimmed,
+                        styleName: style.rawValue,
+                        modelId: llmModelId
+                    ) { status in
+                        Task { @MainActor [weak self] in
+                            self?.statusMessage = status
+                        }
+                    }
+
+                    await MainActor.run {
+                        self.expandedPrompt = basePrompt
+                        self.statusMessage = "Đã viết xong prompt! Đang chuyển sang GPU vẽ tranh..."
+                    }
+                } else {
+                    basePrompt = trimmed
+                }
+
+                let fullPrompt = basePrompt + style.promptSuffix
+                let cgImage = try await self.runDiffusionPipeline(fullPrompt: fullPrompt, steps: steps)
                 let uiImage = UIImage(cgImage: cgImage)
+
                 await MainActor.run {
                     self.generatedImage = uiImage
                     self.statusMessage = "Đã vẽ xong!"
                     self.isGenerating = false
+                    UIApplication.shared.isIdleTimerDisabled = false
                 }
             } catch {
                 let message = error.localizedDescription
                 await MainActor.run {
                     self.statusMessage = "Lỗi: \(message)"
                     self.isGenerating = false
+                    UIApplication.shared.isIdleTimerDisabled = false
                 }
             }
         }
     }
 
-    private nonisolated func runPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
+    private nonisolated func runDiffusionPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
         let config = StableDiffusionConfiguration.presetSDXLTurbo
         let loadConfig = LoadConfiguration(float16: true, quantize: true)
 
         try await config.download { progress in
             let fraction = progress.fractionCompleted
-            Task { @MainActor in
-                self.downloadProgress = fraction
+            Task { @MainActor [weak self] in
+                self?.downloadProgress = fraction
                 let percent = Int(fraction * 100)
                 if percent < 100 {
-                    self.statusMessage = "Đang tải model về iPad: \(percent)%"
+                    self?.statusMessage = "Đang kiểm tra / tải model vẽ: \(percent)%"
                 }
             }
         }
@@ -115,15 +148,15 @@ final class ArtEngine: ObservableObject {
             current = next
             currentStep += 1
             let stepCopy = currentStep
-            Task { @MainActor in
-                self.statusMessage = "Đang vẽ bước \(stepCopy)/\(steps)..."
+            Task { @MainActor [weak self] in
+                self?.statusMessage = "Đang vẽ bước \(stepCopy)/\(steps)..."
             }
         }
 
         let decoder = generator!.detachedDecoder()
-        // Giải phóng UNet và TextEncoder khỏi RAM trước khi giải mã ảnh
         latents = nil
         generator = nil
+        Memory.clearCache()
 
         guard let finalXt = current else {
             throw NSError(
@@ -138,7 +171,9 @@ final class ArtEngine: ObservableObject {
         }
 
         let decoded = decoder(finalXt)
-        return try makeCGImage(from: decoded)
+        let cgImage = try makeCGImage(from: decoded)
+        Memory.clearCache()
+        return cgImage
     }
 
     private nonisolated func makeCGImage(from array: MLXArray) throws -> CGImage {
