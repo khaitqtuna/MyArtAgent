@@ -4,7 +4,7 @@ import MLXLLM
 import MLXLMCommon
 
 struct PromptAgent {
-    static let defaultModelId = "mlx-community/Qwen2.5-3B-Instruct-4bit"
+    static let defaultModelId = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 
     static func expandPrompt(
         userIdea: String,
@@ -16,10 +16,13 @@ struct PromptAgent {
         let targetModel = trimmedModel.isEmpty ? defaultModelId : trimmedModel
 
         let systemPrompt = """
-        You are an expert AI art prompt engineer.
-        Convert the user's idea (which may be in Vietnamese or English) into a single, vivid, concise English image-generation prompt (maximum 55 words).
-        Include subject, composition, lighting, color palette, and atmosphere matching the requested style: \(styleName).
-        Output ONLY the final English prompt text. Do not include explanations, labels, or quotation marks.
+        You are a precise translator and prompt formatter for Stable Diffusion image generation.
+        Translate the user's idea into natural, vivid English image-generation phrases (maximum 48 words), tailored for the style "\(styleName)".
+        STRICT RULES:
+        1. Preserve ONLY the subjects, actions, objects, clothing, colors, mood, and setting explicitly mentioned or directly implied by the user.
+        2. NEVER invent, add, or hallucinate extra characters, animals, objects, text, or lore that the user did not ask for.
+        3. Describe concrete visual details (composition, lighting, atmosphere) concisely without filler prose.
+        4. Output ONLY the final English prompt text, with no labels, explanations, markdown, or quotation marks.
         """
 
         // Ép giới hạn cache GPU xuống 20 MB và dọn sạch trước khi nạp LLM
@@ -33,15 +36,23 @@ struct PromptAgent {
         ) { progress in
             let percent = Int(progress.fractionCompleted * 100)
             if percent < 100 {
-                onStatus("Não AI đang tải model ngôn ngữ: \(percent)%...")
+                onStatus("LLM đang tải mô hình ngôn ngữ: \(percent)%...")
             }
         }
 
-        onStatus("Não AI đang phân tích ý tưởng & viết prompt tiếng Anh...")
+        onStatus("LLM đang dịch & chuẩn hóa prompt tiếng Anh...")
+
+        let generateParameters = GenerateParameters(
+            maxTokens: 110,
+            temperature: 0.2,
+            topP: 0.85,
+            repetitionPenalty: 1.08
+        )
 
         var session: ChatSession? = ChatSession(
             container!,
-            instructions: systemPrompt
+            instructions: systemPrompt,
+            generateParameters: generateParameters
         )
 
         let rawOutput = try await session!.respond(to: userIdea)

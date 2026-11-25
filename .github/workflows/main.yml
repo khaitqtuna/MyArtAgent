@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CACHE_VERSION: v2
+  CACHE_VERSION: v3
 
 jobs:
   build:
@@ -45,6 +45,47 @@ jobs:
           else
             echo "Dung lai mlx-swift-examples tu cache."
           fi
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/Load.swift")
+          text = p.read_text()
+          if "sd15FP16(" not in text:
+              addition = """
+          extension StableDiffusionConfiguration {
+              public static func sd15FP16(
+                  id: String,
+                  cfgWeight: Float = 7.5,
+                  steps: Int = 20
+              ) -> StableDiffusionConfiguration {
+                  StableDiffusionConfiguration(
+                      id: id,
+                      files: [
+                          .unetConfig: "unet/config.json",
+                          .unetWeights: "unet/diffusion_pytorch_model.fp16.safetensors",
+                          .textEncoderConfig: "text_encoder/config.json",
+                          .textEncoderWeights: "text_encoder/model.fp16.safetensors",
+                          .vaeConfig: "vae/config.json",
+                          .vaeWeights: "vae/diffusion_pytorch_model.fp16.safetensors",
+                          .diffusionConfig: "scheduler/scheduler_config.json",
+                          .tokenizerVocabulary: "tokenizer/vocab.json",
+                          .tokenizerMerges: "tokenizer/merges.txt",
+                      ],
+                      defaultParameters: { EvaluateParameters(cfgWeight: cfgWeight, steps: steps) },
+                      factory: { client, sdConfiguration, loadConfiguration in
+                          let sd = try StableDiffusionBase(
+                              client: client, configuration: sdConfiguration, dType: loadConfiguration.dType)
+                          if loadConfiguration.quantize {
+                              quantize(model: sd.textEncoder, filter: { k, m in m is Linear })
+                              quantize(model: sd.unet, groupSize: 32, bits: 8)
+                          }
+                          return sd
+                      }
+                  )
+              }
+          }
+          """
+              p.write_text(text + "\n" + addition)
+          PY
 
       - name: Cai dat XcodeGen (neu chua co)
         run: |

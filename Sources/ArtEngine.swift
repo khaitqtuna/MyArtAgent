@@ -4,8 +4,43 @@ import UIKit
 import MLX
 import StableDiffusion
 
+enum ImageModel: String, CaseIterable, Identifiable {
+    case meinaMix = "digiplay/MeinaMix_v11"
+    case dreamShaper = "Lykon/dreamshaper-8"
+    case majicMix = "digiplay/majicMIX_realistic_v7"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .meinaMix:
+            return "MeinaMix v11 (Pixiv / Anime)"
+        case .dreamShaper:
+            return "DreamShaper 8 (DeviantArt / Minh họa)"
+        case .majicMix:
+            return "majicMIX v7 (Ảnh tả thực)"
+        }
+    }
+
+    var configuration: StableDiffusionConfiguration {
+        StableDiffusionConfiguration.sd15FP16(id: rawValue, cfgWeight: 7.5, steps: 20)
+    }
+
+    var defaultNegativePrompt: String {
+        switch self {
+        case .meinaMix:
+            return "lowres, bad anatomy, bad hands, extra fingers, missing fingers, deformed, blurry, jpeg artifacts, worst quality, low quality, signature, watermark, text"
+        case .dreamShaper:
+            return "lowres, bad anatomy, bad hands, extra fingers, deformed, blurry, ugly, jpeg artifacts, worst quality, low quality, signature, watermark, text"
+        case .majicMix:
+            return "lowres, bad anatomy, bad hands, extra fingers, deformed, plastic skin, cgi, 3d render, blurry, worst quality, low quality, watermark, text"
+        }
+    }
+}
+
 enum ArtStyle: String, CaseIterable, Identifiable {
-    case anime = "Anime / Minh họa 2D"
+    case anime = "Anime / Minh họa 2D (Pixiv)"
+    case digitalArt = "Digital Art / Fantasy (DeviantArt)"
     case oilPainting = "Sơn dầu cổ điển"
     case watercolor = "Màu nước"
     case inkWash = "Tranh thủy mặc"
@@ -17,15 +52,17 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     var promptSuffix: String {
         switch self {
         case .anime:
-            return ", anime illustration, vibrant colors, clean detailed lineart, studio art"
+            return ", masterpiece, best quality, highly detailed anime illustration, vibrant lighting, crisp lineart, pixiv style"
+        case .digitalArt:
+            return ", masterpiece, best quality, highly detailed digital painting, concept art, dramatic lighting, deviantart style"
         case .oilPainting:
-            return ", classic oil painting on canvas, rich brushstrokes, dramatic lighting, fine art"
+            return ", masterpiece, classic oil painting on canvas, rich brushstrokes, dramatic lighting, fine art"
         case .watercolor:
-            return ", delicate watercolor painting, soft pigment washes, textured cold press paper"
+            return ", masterpiece, delicate watercolor painting, soft pigment washes, textured cold press paper"
         case .inkWash:
-            return ", traditional east asian sumi-e ink wash painting, expressive brush strokes, rice paper"
+            return ", masterpiece, traditional east asian sumi-e ink wash painting, expressive brush strokes, rice paper"
         case .realistic:
-            return ", photorealistic photography, natural lighting, sharp focus, highly detailed"
+            return ", photorealistic, raw photo, natural lighting, sharp focus, 8k uhd, highly detailed"
         case .raw:
             return ""
         }
@@ -42,9 +79,10 @@ final class ArtEngine: ObservableObject {
 
     func generateImage(
         idea: String,
+        imageModel: ImageModel,
         style: ArtStyle,
         steps: Int,
-        useAgent: Bool,
+        useLLM: Bool,
         llmModelId: String
     ) {
         let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,15 +92,15 @@ final class ArtEngine: ObservableObject {
         downloadProgress = 0
         expandedPrompt = ""
         UIApplication.shared.isIdleTimerDisabled = true
-        statusMessage = useAgent
-            ? "Đang khởi động Não AI Agent..."
-            : "Đang kiểm tra model AI..."
+        statusMessage = useLLM
+            ? "Đang khởi động mô hình LLM..."
+            : "Đang kiểm tra model vẽ tranh..."
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 let basePrompt: String
-                if useAgent {
+                if useLLM {
                     basePrompt = try await PromptAgent.expandPrompt(
                         userIdea: trimmed,
                         styleName: style.rawValue,
@@ -76,14 +114,18 @@ final class ArtEngine: ObservableObject {
                     await MainActor.run {
                         self.expandedPrompt = basePrompt
                         self.downloadProgress = 0
-                        self.statusMessage = "Đã viết xong prompt! Đang chuyển sang GPU vẽ tranh..."
+                        self.statusMessage = "Đã tạo xong prompt! Đang chuyển sang GPU vẽ tranh..."
                     }
                 } else {
                     basePrompt = trimmed
                 }
 
                 let fullPrompt = basePrompt + style.promptSuffix
-                let cgImage = try await self.runPipeline(fullPrompt: fullPrompt, steps: steps)
+                let cgImage = try await self.runPipeline(
+                    fullPrompt: fullPrompt,
+                    imageModel: imageModel,
+                    steps: steps
+                )
                 let uiImage = UIImage(cgImage: cgImage)
                 await MainActor.run {
                     self.generatedImage = uiImage
@@ -102,13 +144,17 @@ final class ArtEngine: ObservableObject {
         }
     }
 
-    private nonisolated func runPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
+    private nonisolated func runPipeline(
+        fullPrompt: String,
+        imageModel: ImageModel,
+        steps: Int
+    ) async throws -> CGImage {
         // Ép giới hạn cache GPU xuống 20 MB để tránh bị iPadOS Jetsam kill app
         Memory.cacheLimit = 20 * 1024 * 1024
         Memory.clearCache()
         defer { Memory.clearCache() }
 
-        let config = StableDiffusionConfiguration.presetSDXLTurbo
+        let config = imageModel.configuration
         let loadConfig = LoadConfiguration(float16: true, quantize: true)
 
         try await config.download { progress in
@@ -117,7 +163,7 @@ final class ArtEngine: ObservableObject {
                 self?.downloadProgress = fraction
                 let percent = Int(fraction * 100)
                 if percent < 100 {
-                    self?.statusMessage = "Đang tải model về iPad: \(percent)%"
+                    self?.statusMessage = "Đang tải model vẽ về iPad: \(percent)%"
                 }
             }
         }
@@ -128,6 +174,7 @@ final class ArtEngine: ObservableObject {
 
         var params = config.defaultParameters()
         params.prompt = fullPrompt
+        params.negativePrompt = imageModel.defaultNegativePrompt
         params.steps = steps
         params.seed = UInt64.random(in: 0 ..< UInt64.max)
 
@@ -140,7 +187,7 @@ final class ArtEngine: ObservableObject {
             )
         }
 
-        // Không gọi ensureLoaded() để tránh nạp cùng lúc toàn bộ 4 mạng nơ-ron vào RAM
+        // Không gọi ensureLoaded() để tránh nạp cùng lúc toàn bộ mạng nơ-ron vào RAM
         await MainActor.run {
             self.statusMessage = "Đang vẽ bước 1/\(steps)..."
         }

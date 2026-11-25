@@ -13,9 +13,10 @@ struct MyArtAgentApp: App {
 struct ContentView: View {
     @StateObject private var engine = ArtEngine()
     @State private var ideaText: String = ""
+    @State private var selectedImageModel: ImageModel = .meinaMix
     @State private var selectedStyle: ArtStyle = .anime
-    @State private var steps: Int = 4
-    @State private var useAgent: Bool = true
+    @State private var steps: Int = 20
+    @State private var useLLM: Bool = true
     @State private var llmModelId: String = PromptAgent.defaultModelId
     @State private var savedNotice: String = ""
 
@@ -24,16 +25,16 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(useAgent
+                        Text(useLLM
                              ? "Nhập ý tưởng tranh (tiếng Việt hay tiếng Anh đều được):"
                              : "Nhập thẳng Prompt tiếng Anh (Direct Mode):")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         TextField(
-                            useAgent
-                                ? "VD: Một quán mì nhỏ ấm cúng giữa đêm mưa ở Tokyo"
-                                : "VD: A cozy ramen shop at night in the rain, warm glow",
+                            useLLM
+                                ? "VD: Một cô gái cầm đèn lồng giữa phố đêm mưa ở Tokyo"
+                                : "VD: 1girl holding a paper lantern in a rainy Tokyo street at night",
                             text: $ideaText,
                             axis: .vertical
                         )
@@ -41,10 +42,10 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                     }
 
-                    Toggle("Bật Não AI Agent (tự dịch & viết prompt)", isOn: $useAgent)
+                    Toggle("Bật LLM tối ưu prompt (dịch & viết chi tiết)", isOn: $useLLM)
 
-                    if useAgent {
-                        DisclosureGroup("Tùy chỉnh model Não AI (Hugging Face)") {
+                    if useLLM {
+                        DisclosureGroup("Tùy chỉnh mô hình LLM (Hugging Face)") {
                             VStack(alignment: .leading, spacing: 6) {
                                 TextField("Hugging Face MLX Model ID", text: $llmModelId)
                                     .textInputAutocapitalization(.never)
@@ -52,13 +53,24 @@ struct ContentView: View {
                                     .textFieldStyle(.roundedBorder)
                                     .font(.caption)
 
-                                Text("Mặc định dùng Qwen2.5-3B (4-bit, ~1.8 GB). Có thể đổi sang bất kỳ model MLX 4-bit nào khác trên Hugging Face.")
+                                Text("Mặc định dùng Qwen3-4B-Instruct-2507 (4-bit, ~2.1 GB) dịch sát ý, ít bịa thêm chi tiết. Có thể đổi sang model MLX 4-bit khác.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.top, 6)
                         }
                         .font(.subheadline)
+                    }
+
+                    HStack {
+                        Text("Mô hình vẽ:")
+                        Spacer()
+                        Picker("Mô hình vẽ", selection: $selectedImageModel) {
+                            ForEach(ImageModel.allCases) { model in
+                                Text(model.displayName).tag(model)
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
 
                     HStack {
@@ -72,19 +84,20 @@ struct ContentView: View {
                         .pickerStyle(.menu)
                     }
 
-                    Stepper("Số bước vẽ (Steps): \(steps)", value: $steps, in: 2...8)
+                    Stepper("Số bước vẽ (Steps): \(steps)", value: $steps, in: 10...35, step: 2)
 
                     Button {
                         savedNotice = ""
                         engine.generateImage(
                             idea: ideaText,
+                            imageModel: selectedImageModel,
                             style: selectedStyle,
                             steps: steps,
-                            useAgent: useAgent,
+                            useLLM: useLLM,
                             llmModelId: llmModelId
                         )
                     } label: {
-                        Text(engine.isGenerating ? "Đang xử lý..." : "Tạo tranh bằng AI Agent")
+                        Text(engine.isGenerating ? "Đang xử lý..." : "Tạo tranh AI")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
@@ -106,7 +119,7 @@ struct ContentView: View {
 
                     if !engine.expandedPrompt.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Prompt tiếng Anh do Agent viết:")
+                            Text("Prompt tiếng Anh do LLM tạo:")
                                 .font(.caption)
                                 .bold()
                                 .foregroundStyle(.secondary)
