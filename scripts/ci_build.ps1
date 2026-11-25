@@ -43,8 +43,8 @@ while ($true) {
         break
     }
     Write-Host "[${elapsed}s] Trang thai: $($info.status)..."
-    Start-Sleep -Seconds 20
-    $elapsed += 20
+    Start-Sleep -Seconds 10
+    $elapsed += 10
 }
 
 if ($conclusion -eq "success") {

@@ -9,6 +9,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CACHE_VERSION: v2
+
 jobs:
   build:
     runs-on: macos-latest
@@ -16,24 +19,57 @@ jobs:
       - name: Tai code ve may Mac ao
         uses: actions/checkout@v4
 
-      - name: Tai va sua loi phien ban iOS cho thu vien AI
+      - name: Lay thong tin Xcode va macOS cho cache key
+        id: meta
         run: |
-          git clone --depth 1 https://github.com/ml-explore/mlx-swift-examples.git
-          python3 -c 'import re, pathlib; p = pathlib.Path("mlx-swift-examples/Package.swift"); p.write_text(re.sub(r"\.iOS\([^)]+\)", ".iOS(.v17)", p.read_text()))'
+          XCODE_VER=$(xcodebuild -version | tr '\n' '-' | tr -s ' ' | tr ' ' '_')
+          echo "xcode=$XCODE_VER" >> "$GITHUB_OUTPUT"
 
-      - name: Cache thu vien Swift Packages
+      - name: Khoi phuc cache thu vien & DerivedData
+        id: build-cache
         uses: actions/cache@v4
         with:
-          path: build/SourcePackages
-          key: spm-${{ hashFiles('project.yml', 'mlx-swift-examples/Package.swift') }}
+          path: |
+            mlx-swift-examples
+            build
+            MyArtAgent.xcodeproj
+          key: xcode-${{ env.CACHE_VERSION }}-${{ steps.meta.outputs.xcode }}-${{ hashFiles('project.yml', 'MyArtAgent.entitlements') }}
           restore-keys: |
-            spm-
+            xcode-${{ env.CACHE_VERSION }}-${{ steps.meta.outputs.xcode }}-
 
-      - name: Cai dat XcodeGen
-        run: brew install xcodegen
+      - name: Tai va sua loi phien ban iOS cho thu vien AI (neu chua co cache)
+        run: |
+          if [ ! -d "mlx-swift-examples" ]; then
+            git clone --depth 1 https://github.com/ml-explore/mlx-swift-examples.git
+            python3 -c 'import re, pathlib; p = pathlib.Path("mlx-swift-examples/Package.swift"); p.write_text(re.sub(r"\.iOS\([^)]+\)", ".iOS(.v17)", p.read_text()))'
+          else
+            echo "Dung lai mlx-swift-examples tu cache."
+          fi
 
-      - name: Tu dong tao du an Xcode
-        run: xcodegen generate
+      - name: Cai dat XcodeGen (neu chua co)
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
+          fi
+
+      - name: Tao hoac giu nguyen du an Xcode
+        run: |
+          if [ -d "MyArtAgent.xcodeproj" ]; then
+            cp -R MyArtAgent.xcodeproj MyArtAgent.xcodeproj.bak
+          fi
+          xcodegen generate
+          if [ -d "MyArtAgent.xcodeproj.bak" ] && diff -q MyArtAgent.xcodeproj/project.pbxproj MyArtAgent.xcodeproj.bak/project.pbxproj >/dev/null 2>&1; then
+            echo "project.pbxproj khong doi, giu nguyen cache MyArtAgent.xcodeproj & Package.resolved."
+            rm -rf MyArtAgent.xcodeproj
+            mv MyArtAgent.xcodeproj.bak MyArtAgent.xcodeproj
+          else
+            if [ -f "MyArtAgent.xcodeproj.bak/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" ]; then
+              mkdir -p MyArtAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+              cp MyArtAgent.xcodeproj.bak/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+                 MyArtAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+            fi
+            rm -rf MyArtAgent.xcodeproj.bak
+          fi
 
       - name: Bien dich app cho iPad
         run: |
@@ -44,18 +80,25 @@ jobs:
             -derivedDataPath build \
             -skipPackagePluginValidation \
             -skipMacroValidation \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY=""
 
       - name: Dong goi thanh file IPA
         run: |
+          rm -rf Payload MyArtAgent.ipa
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/MyArtAgent.app Payload/
-          zip -r MyArtAgent.ipa Payload
+          zip -rq MyArtAgent.ipa Payload
 
       - name: Luu file IPA de tai ve
         uses: actions/upload-artifact@v4
         with:
           name: MyArtAgent-IPA
           path: MyArtAgent.ipa
+
+      - name: Don dep log va xem dung luong cache
+        run: |
+          rm -rf build/Logs
+          du -sh mlx-swift-examples MyArtAgent.xcodeproj build build/* 2>/dev/null || true

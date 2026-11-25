@@ -32,3 +32,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.local.artagent.MyArtAgent
         TARGETED_DEVICE_FAMILY: "1,2"
+        COMPILER_INDEX_STORE_ENABLE: "NO"
