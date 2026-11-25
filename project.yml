@@ -1,6 +1,10 @@
 name: MyArtAgent
 options:
   bundleIdPrefix: com.local.artagent
+packages:
+  MLXSwiftExamples:
+    url: https://github.com/ml-explore/mlx-swift-examples
+    branch: main
 targets:
   MyArtAgent:
     type: application
@@ -10,6 +14,9 @@ targets:
       - path: Sources
     entitlements:
       path: MyArtAgent.entitlements
+    dependencies:
+      - package: MLXSwiftExamples
+        product: StableDiffusion
     info:
       path: Info.plist
       properties:
