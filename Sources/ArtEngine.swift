@@ -48,85 +48,91 @@ final class ArtEngine: ObservableObject {
 
         let fullPrompt = trimmed + style.promptSuffix
 
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
-                let config = StableDiffusionConfiguration.presetSDXLTurbo
-                // Bật quantize: true để nén model nhẹ hơn, tránh tràn RAM khi sideload
-                let loadConfig = LoadConfiguration(float16: true, quantize: true)
-
-                try await config.download { progress in
-                    Task { @MainActor in
-                        self.downloadProgress = progress.fractionCompleted
-                        let percent = Int(progress.fractionCompleted * 100)
-                        if percent < 100 {
-                            self.statusMessage = "Đang tải model về iPad: \(percent)%"
-                        }
-                    }
-                }
-
-                await MainActor.run {
-                    self.statusMessage = "Đang khởi động GPU M5 và vẽ tranh..."
-                }
-
-                var params = config.defaultParameters()
-                params.prompt = fullPrompt
-                params.steps = steps
-                params.seed = UInt64.random(in: 0 ..< UInt64.max)
-
-                // Đóng gói bước sinh ảnh trong closure riêng để tự giải phóng UNet khỏi RAM trước khi xuất ảnh
-                let (finalXt, decoder) = try {
-                    guard let generator = try config.textToImageGenerator(configuration: loadConfig) else {
-                        throw NSError(
-                            domain: "ArtEngine",
-                            code: 1,
-                            userInfo: [NSLocalizedDescriptionKey: "Không thể nạp model vẽ vào bộ nhớ."]
-                        )
-                    }
-
-                    generator.ensureLoaded()
-                    var latents = generator.generateLatents(parameters: params)
-                    var current = latents.next()
-                    var currentStep = 1
-
-                    while let next = latents.next() {
-                        current = next
-                        currentStep += 1
-                        let stepCopy = currentStep
-                        Task { @MainActor in
-                            self.statusMessage = "Đang vẽ bước \(stepCopy)/\(steps)..."
-                        }
-                    }
-
-                    guard let xt = current else {
-                        throw NSError(
-                            domain: "ArtEngine",
-                            code: 2,
-                            userInfo: [NSLocalizedDescriptionKey: "Không tạo được dữ liệu ảnh đầu ra."]
-                        )
-                    }
-
-                    return (xt, generator.detachedDecoder())
-                }()
-
-                await MainActor.run {
-                    self.statusMessage = "Đang hoàn thiện chi tiết ảnh..."
-                }
-
-                let decoded = decoder(finalXt)
-                let cgImage = StableDiffusion.Image(decoded).asCGImage()
+                let cgImage = try await self.runPipeline(fullPrompt: fullPrompt, steps: steps)
                 let uiImage = UIImage(cgImage: cgImage)
-
                 await MainActor.run {
                     self.generatedImage = uiImage
                     self.statusMessage = "Đã vẽ xong!"
                     self.isGenerating = false
                 }
             } catch {
+                let message = error.localizedDescription
                 await MainActor.run {
-                    self.statusMessage = "Lỗi: \(error.localizedDescription)"
+                    self.statusMessage = "Lỗi: \(message)"
                     self.isGenerating = false
                 }
             }
         }
+    }
+
+    private nonisolated func runPipeline(fullPrompt: String, steps: Int) async throws -> CGImage {
+        let config = StableDiffusionConfiguration.presetSDXLTurbo
+        let loadConfig = LoadConfiguration(float16: true, quantize: true)
+
+        try await config.download { progress in
+            let fraction = progress.fractionCompleted
+            Task { @MainActor in
+                self.downloadProgress = fraction
+                let percent = Int(fraction * 100)
+                if percent < 100 {
+                    self.statusMessage = "Đang tải model về iPad: \(percent)%"
+                }
+            }
+        }
+
+        await MainActor.run {
+            self.statusMessage = "Đang khởi động GPU M5 và vẽ tranh..."
+        }
+
+        var params = config.defaultParameters()
+        params.prompt = fullPrompt
+        params.steps = steps
+        params.seed = UInt64.random(in: 0 ..< UInt64.max)
+
+        var generator = try config.textToImageGenerator(configuration: loadConfig)
+        guard generator != nil else {
+            throw NSError(
+                domain: "ArtEngine",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Không thể nạp model vẽ vào bộ nhớ."]
+            )
+        }
+
+        generator!.ensureLoaded()
+        var latents = Optional(generator!.generateLatents(parameters: params))
+        var current = latents?.next() ?? nil
+        var currentStep = 1
+
+        while let next = (latents?.next() ?? nil) {
+            current = next
+            currentStep += 1
+            let stepCopy = currentStep
+            Task { @MainActor in
+                self.statusMessage = "Đang vẽ bước \(stepCopy)/\(steps)..."
+            }
+        }
+
+        let decoder = generator!.detachedDecoder()
+        // Giải phóng UNet và TextEncoder khỏi RAM trước khi giải mã ảnh
+        latents = nil
+        generator = nil
+
+        guard let finalXt = current else {
+            throw NSError(
+                domain: "ArtEngine",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Không tạo được dữ liệu ảnh đầu ra."]
+            )
+        }
+
+        await MainActor.run {
+            self.statusMessage = "Đang hoàn thiện chi tiết ảnh..."
+        }
+
+        let decoded = decoder(finalXt)
+        return StableDiffusion.Image(decoded).asCGImage()
     }
 }
