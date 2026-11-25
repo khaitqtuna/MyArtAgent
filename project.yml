@@ -3,8 +3,7 @@ options:
   bundleIdPrefix: com.local.artagent
 packages:
   MLXSwiftExamples:
-    url: https://github.com/ml-explore/mlx-swift-examples
-    branch: main
+    path: mlx-swift-examples
 targets:
   MyArtAgent:
     type: application
