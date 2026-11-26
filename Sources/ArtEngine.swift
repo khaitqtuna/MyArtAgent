@@ -118,13 +118,13 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
 }
 
 enum AspectRatio: String, CaseIterable, Identifiable {
-    case square = "Vuông (1:1)"
-    case portrait = "Dọc chân dung (2:3)"
-    case landscape = "Ngang phong cảnh (3:2)"
+    case square = "Vuông (1:1 • 768px SDXL / 512px SD1.5)"
+    case portrait = "Dọc chân dung (2:3 • 640×896 / 512×768)"
+    case landscape = "Ngang phong cảnh (3:2 • 896×640 / 768×512)"
 
     var id: String { rawValue }
 
-    func latentSize(isSDXL: Bool, lowRAMMode: Bool) -> [Int] {
+    func latentSize(isSDXL: Bool) -> [Int] {
         if !isSDXL {
             switch self {
             case .square: return [64, 64]       // 512x512
@@ -132,17 +132,10 @@ enum AspectRatio: String, CaseIterable, Identifiable {
             case .landscape: return [64, 96]    // 768x512
             }
         }
-        if lowRAMMode {
-            switch self {
-            case .square: return [96, 96]       // 768x768 (giảm ~44% RAM activation)
-            case .portrait: return [112, 80]    // 640x896
-            case .landscape: return [80, 112]   // 896x640
-            }
-        }
         switch self {
-        case .square: return [128, 128]         // 1024x1024
-        case .portrait: return [152, 104]       // 832x1216
-        case .landscape: return [104, 152]      // 1216x832
+        case .square: return [96, 96]           // 768x768
+        case .portrait: return [112, 80]        // 640x896
+        case .landscape: return [80, 112]       // 896x640
         }
     }
 }
@@ -181,7 +174,6 @@ final class ArtEngine: ObservableObject {
         imageCount: Int,
         generationMode: GenerationMode,
         lockSequenceSeed: Bool,
-        lowRAMMode: Bool,
         negativePrompt: String,
         useLLM: Bool,
         primaryLLM: LLMModelPreset,
@@ -275,8 +267,7 @@ final class ArtEngine: ObservableObject {
                     aspectRatio: aspectRatio,
                     steps: steps,
                     negativePrompt: negativePrompt,
-                    lockSequenceSeed: isSequence && lockSequenceSeed,
-                    lowRAMMode: lowRAMMode
+                    lockSequenceSeed: isSequence && lockSequenceSeed
                 )
 
                 await MainActor.run {
@@ -371,14 +362,11 @@ final class ArtEngine: ObservableObject {
         aspectRatio: AspectRatio,
         steps: Int,
         negativePrompt: String,
-        lockSequenceSeed: Bool,
-        lowRAMMode: Bool
+        lockSequenceSeed: Bool
     ) async throws {
-        // Ép giới hạn cache GPU xuống 20 MB và giới hạn tổng bộ nhớ khi bật chế độ tiết kiệm RAM
+        // Luôn ép giới hạn cache GPU xuống 20 MB và giới hạn tổng bộ nhớ ~3.2 GB để bảo vệ RAM iPadOS
         Memory.cacheLimit = 20 * 1024 * 1024
-        if lowRAMMode {
-            Memory.memoryLimit = 3_400 * 1024 * 1024
-        }
+        Memory.memoryLimit = 3_200 * 1024 * 1024
         Memory.clearCache()
         defer { Memory.clearCache() }
 
@@ -410,8 +398,8 @@ final class ArtEngine: ObservableObject {
             )
         }
 
-        let targetLatentSize = aspectRatio.latentSize(isSDXL: resolved.isSDXL, lowRAMMode: lowRAMMode)
-        let unetBits = (resolved.isSDXL && lowRAMMode) ? 4 : 8
+        let targetLatentSize = aspectRatio.latentSize(isSDXL: resolved.isSDXL)
+        let unetBits = resolved.isSDXL ? 4 : 8
 
         try config.runLowMemorySequence(
             items: items,
@@ -425,10 +413,8 @@ final class ArtEngine: ObservableObject {
                     self?.statusMessage = status
                 }
             },
-            onDecodedImage: { index, decoded in
-                let cgImage = try autoreleasepool {
-                    try ArtEngine.makeCGImage(from: decoded)
-                }
+            onDecodedRGBA: { index, rgbaData, width, height in
+                let cgImage = try ArtEngine.makeCGImage(fromRGBA: rgbaData, width: width, height: height)
                 let uiImage = UIImage(cgImage: cgImage)
                 let promptText = items[index].prompt
                 let seedValue = items[index].seed
@@ -446,41 +432,7 @@ final class ArtEngine: ObservableObject {
         )
     }
 
-    private nonisolated static func makeCGImage(from array: MLXArray) throws -> CGImage {
-        let imageArray = array.ndim == 4 ? array[0] : array
-        guard imageArray.ndim == 3 else {
-            throw NSError(
-                domain: "ArtEngine",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Định dạng dữ liệu ảnh không hợp lệ: \(imageArray.shape)"]
-            )
-        }
-
-        let height = imageArray.shape[0]
-        let width = imageArray.shape[1]
-        let channels = imageArray.shape[2]
-
-        let scaled = clip(imageArray.asType(.float32) * 255.0, min: 0, max: 255).asType(.uint8)
-        eval(scaled)
-        let pixels = scaled.asArray(UInt8.self)
-
-        var rgba = [UInt8](repeating: 255, count: width * height * 4)
-        for i in 0 ..< (width * height) {
-            let src = i * channels
-            let dst = i * 4
-            if channels >= 3 {
-                rgba[dst] = pixels[src]
-                rgba[dst + 1] = pixels[src + 1]
-                rgba[dst + 2] = pixels[src + 2]
-            } else {
-                let gray = pixels[src]
-                rgba[dst] = gray
-                rgba[dst + 1] = gray
-                rgba[dst + 2] = gray
-            }
-        }
-
-        let data = Data(rgba)
+    private nonisolated static func makeCGImage(fromRGBA data: Data, width: Int, height: Int) throws -> CGImage {
         guard let provider = CGDataProvider(data: data as CFData),
               let cgImage = CGImage(
                   width: width,
@@ -502,7 +454,6 @@ final class ArtEngine: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Không thể dựng ảnh CGImage từ dữ liệu AI."]
             )
         }
-
         return cgImage
     }
 }

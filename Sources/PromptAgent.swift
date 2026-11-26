@@ -204,8 +204,9 @@ struct PromptAgent {
         actionMessage: String,
         onStatus: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        // Ép giới hạn cache GPU xuống 20 MB và giải phóng hoàn toàn trước khi nạp từng LLM
+        // Ép giới hạn cache GPU xuống 20 MB và trần bộ nhớ để tránh bị iPadOS Jetsam kill
         Memory.cacheLimit = 20 * 1024 * 1024
+        Memory.memoryLimit = 3_200 * 1024 * 1024
         Memory.clearCache()
         defer { Memory.clearCache() }
 

@@ -21,7 +21,6 @@ struct ContentView: View {
     @State private var imageCount: Int = 1
     @State private var generationMode: GenerationMode = .sequenceGrowth
     @State private var lockSequenceSeed: Bool = true
-    @State private var lowRAMMode: Bool = true
     @State private var negativePrompt: String = DiffusionModelPreset.meinaMixSD15.defaultNegativePrompt
     @State private var useLLM: Bool = true
     @State private var primaryLLM: LLMModelPreset = PromptAgent.defaultPrimaryModel
@@ -169,9 +168,6 @@ struct ContentView: View {
                         }
                     }
 
-                    Toggle("Chế độ tiết kiệm RAM iPad (3 pha tuần tự, 768px/4-bit SDXL)", isOn: $lowRAMMode)
-                        .font(.subheadline)
-
                     DisclosureGroup("Negative Prompt (Chống lỗi nét / mờ)") {
                         VStack(alignment: .leading, spacing: 6) {
                             TextField("Nhập những thứ muốn loại trừ...", text: $negativePrompt, axis: .vertical)
@@ -203,7 +199,6 @@ struct ContentView: View {
                             imageCount: imageCount,
                             generationMode: generationMode,
                             lockSequenceSeed: lockSequenceSeed,
-                            lowRAMMode: lowRAMMode,
                             negativePrompt: negativePrompt,
                             useLLM: useLLM,
                             primaryLLM: primaryLLM,

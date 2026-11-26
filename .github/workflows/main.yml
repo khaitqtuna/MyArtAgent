@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CACHE_VERSION: v6
+  CACHE_VERSION: v7
 
 jobs:
   build:
@@ -48,7 +48,7 @@ jobs:
           python3 - <<'PY'
           import pathlib
 
-          # 1. Patch VAE.swift de eval & clearCache sau tung block do phan giai cao, tranh tran RAM Metal luc decode
+          # 1. Patch VAE.swift de eval & clearCache sau tung block do phan giai cao
           vae_path = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/VAE.swift")
           vae_text = vae_path.read_text()
 
@@ -60,13 +60,13 @@ jobs:
           new_ed_block = "\n".join([
               "        for resnet in resnets {",
               "            x = resnet(x)",
-              "            if x.dim(1) >= 256 {",
+              "            if x.dim(1) >= 192 {",
               "                eval(x)",
               "                Memory.clearCache()",
               "            }",
               "        }",
           ])
-          if old_ed_block in vae_text and "x.dim(1) >= 256" not in vae_text:
+          if old_ed_block in vae_text and "x.dim(1) >= 192" not in vae_text:
               vae_text = vae_text.replace(old_ed_block, new_ed_block)
 
           old_decoder_call = "\n".join([
@@ -86,7 +86,7 @@ jobs:
 
           vae_path.write_text(vae_text)
 
-          # 2. Patch Load.swift voi DecoderOnlyAutoencoder, autoreleasepool moi buoc, va 3 pha tuan tu
+          # 2. Patch Load.swift voi Sequential CFG (batch=1), Chunked UNet eval, DecoderOnlyAutoencoder & Tiled VAE decode
           load_path = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/Load.swift")
           load_text = load_path.read_text()
 
@@ -123,7 +123,7 @@ jobs:
           if old_load_weights in load_text:
               load_text = load_text.replace(old_load_weights, new_load_weights)
 
-          if "DecoderOnlyAutoencoder" not in load_text:
+          if "tiledDecodeRGBA" not in load_text:
               addition = """
           public struct SequencePromptItem: Sendable {
               public let prompt: String
@@ -270,7 +270,109 @@ jobs:
                   return MLXArray(flat).reshaped(count, maxLen)
               }
 
-              /// Chạy tuần tự 3 pha (TextEncoder -> UNet -> Decoder-only VAE), giải phóng hoàn toàn từng pha & autoreleasepool.
+              private static func tileStarts(total: Int, tile: Int, stride: Int) -> [Int] {
+                  if total <= tile { return [0] }
+                  var starts: [Int] = []
+                  var pos = 0
+                  while pos + tile < total {
+                      starts.append(pos)
+                      pos += stride
+                  }
+                  starts.append(max(0, total - tile))
+                  return starts
+              }
+
+              /// Giải mã VAE theo từng mảnh gối đầu (tiled decode) để tránh bùng nổ RAM GPU ở bước tạo ảnh.
+              private static func tiledDecodeRGBA(
+                  vae: DecoderOnlyAutoencoder,
+                  latent: MLXArray
+              ) -> (data: Data, width: Int, height: Int) {
+                  let hLat = latent.dim(1)
+                  let wLat = latent.dim(2)
+                  let hImg = hLat * 8
+                  let wImg = wLat * 8
+
+                  let tileLat = 48
+                  let overlapLat = 8
+                  let strideLat = tileLat - overlapLat
+                  let overlapImg = overlapLat * 8
+
+                  let yStarts = tileStarts(total: hLat, tile: tileLat, stride: strideLat)
+                  let xStarts = tileStarts(total: wLat, tile: tileLat, stride: strideLat)
+
+                  var accumRGB = [Float](repeating: 0, count: hImg * wImg * 3)
+                  var weightSum = [Float](repeating: 0, count: hImg * wImg)
+
+                  for y0 in yStarts {
+                      let th = min(tileLat, hLat - y0)
+                      let imgY0 = y0 * 8
+                      let imgH = th * 8
+                      let fadeTop = y0 > 0 ? min(overlapImg, imgH / 2) : 0
+                      let fadeBottom = (y0 + th < hLat) ? min(overlapImg, imgH / 2) : 0
+
+                      for x0 in xStarts {
+                          let tw = min(tileLat, wLat - x0)
+                          let imgX0 = x0 * 8
+                          let imgW = tw * 8
+                          let fadeLeft = x0 > 0 ? min(overlapImg, imgW / 2) : 0
+                          let fadeRight = (x0 + tw < wLat) ? min(overlapImg, imgW / 2) : 0
+
+                          let tilePixels: [Float] = autoreleasepool {
+                              let subLatent = latent[0..., y0..<(y0 + th), x0..<(x0 + tw), 0...]
+                              var decoded = vae.decode(subLatent)
+                              decoded = clip(decoded / 2.0 + 0.5, min: 0.0, max: 1.0)
+                              eval(decoded)
+                              return decoded[0].asType(.float32).asArray(Float.self)
+                          }
+                          Memory.clearCache()
+
+                          for dy in 0..<imgH {
+                              var wy: Float = 1.0
+                              if fadeTop > 0 && dy < fadeTop {
+                                  wy = Float(dy + 1) / Float(fadeTop + 1)
+                              } else if fadeBottom > 0 && dy >= imgH - fadeBottom {
+                                  wy = Float(imgH - dy) / Float(fadeBottom + 1)
+                              }
+                              let outRow = (imgY0 + dy) * wImg
+                              let inRow = dy * imgW
+
+                              for dx in 0..<imgW {
+                                  var wx: Float = 1.0
+                                  if fadeLeft > 0 && dx < fadeLeft {
+                                      wx = Float(dx + 1) / Float(fadeLeft + 1)
+                                  } else if fadeRight > 0 && dx >= imgW - fadeRight {
+                                      wx = Float(imgW - dx) / Float(fadeRight + 1)
+                                  }
+                                  let w = max(wy * wx, 1e-4)
+                                  let outIdx = outRow + imgX0 + dx
+                                  let inSrc = (inRow + dx) * 3
+                                  let outDst = outIdx * 3
+
+                                  accumRGB[outDst] += tilePixels[inSrc] * w
+                                  accumRGB[outDst + 1] += tilePixels[inSrc + 1] * w
+                                  accumRGB[outDst + 2] += tilePixels[inSrc + 2] * w
+                                  weightSum[outIdx] += w
+                              }
+                          }
+                      }
+                  }
+
+                  var rgba = [UInt8](repeating: 255, count: wImg * hImg * 4)
+                  for i in 0..<(wImg * hImg) {
+                      let inv = 1.0 / max(weightSum[i], 1e-6)
+                      let src = i * 3
+                      let dst = i * 4
+                      let r = accumRGB[src] * inv * 255.0
+                      let g = accumRGB[src + 1] * inv * 255.0
+                      let b = accumRGB[src + 2] * inv * 255.0
+                      rgba[dst] = r.isFinite ? UInt8(min(max(r, 0), 255)) : 0
+                      rgba[dst + 1] = g.isFinite ? UInt8(min(max(g, 0), 255)) : 0
+                      rgba[dst + 2] = b.isFinite ? UInt8(min(max(b, 0), 255)) : 0
+                  }
+                  return (Data(rgba), wImg, hImg)
+              }
+
+              /// Chạy tuần tự 3 pha siêu tiết kiệm RAM: TextEncoder -> UNet (CFG batch=1) -> Tiled Decoder-only VAE.
               public func runLowMemorySequence(
                   client: HubClient = .default,
                   items: [SequencePromptItem],
@@ -278,9 +380,9 @@ jobs:
                   steps: Int,
                   cfgWeight: Float,
                   latentSize: [Int],
-                  unetBits: Int = 8,
+                  unetBits: Int = 4,
                   onProgress: @Sendable (String) -> Void,
-                  onDecodedImage: @Sendable (Int, MLXArray) throws -> Void
+                  onDecodedRGBA: @Sendable (Int, Data, Int, Int) throws -> Void
               ) throws {
                   guard !items.isEmpty else { return }
                   let dType: DType = .float16
@@ -341,15 +443,20 @@ jobs:
                       tokenizer2 = nil
                   }
                   Memory.clearCache()
+                  Thread.sleep(forTimeInterval: 0.2)
 
-                  // PHA 2: Nạp UNet đơn lẻ, tạo toàn bộ latent (~128 KB/ảnh) rồi giải phóng UNet hoàn toàn
+                  // PHA 2: Nạp UNet đơn lẻ, eval theo cụm nhỏ, chạy CFG batch=1 tuần tự để giảm 50% RAM activation
                   var latentsOut: [MLXArray] = []
-                  onProgress("Pha 2/3: Đang nạp UNet (\\(unetBits)-bit tiết kiệm RAM)...")
+                  onProgress("Pha 2/3: Đang nạp UNet (\\(unetBits)-bit tối ưu RAM)...")
                   try autoreleasepool {
                       var unet: UNetModel? = try loadUnet(client: client, configuration: self, dType: dType)
                       quantize(model: unet!, groupSize: 32, bits: unetBits)
-                      eval(unet!)
-                      Memory.clearCache()
+                      let flatParams = unet!.parameters().flattened()
+                      for start in stride(from: 0, to: flatParams.count, by: 48) {
+                          let end = min(start + 48, flatParams.count)
+                          eval(flatParams[start..<end].map(\\.1))
+                          Memory.clearCache()
+                      }
 
                       let sampler: SimpleEulerSampler = isSDXL
                           ? SimpleEulerAncestralSampler(configuration: diffusionConfig)
@@ -361,15 +468,22 @@ jobs:
                           MLXRandom.seed(item.seed)
                           let encoded = encodedPrompts[idx]
 
-                          var textTime: (MLXArray, MLXArray)? = nil
+                          let condPos = encoded.conditioning[0..<1]
+                          let condNeg: MLXArray? = (cfgWeight > 1 && encoded.conditioning.dim(0) > 1)
+                              ? encoded.conditioning[1..<2]
+                              : nil
+
+                          var textTimePos: (MLXArray, MLXArray)? = nil
+                          var textTimeNeg: (MLXArray, MLXArray)? = nil
                           if isSDXL, let pooled = encoded.pooled {
                               let targetH = Double(latentSize[0] * 8)
                               let targetW = Double(latentSize[1] * 8)
                               let timeIds: [Double] = [targetH, targetW, 0.0, 0.0, targetH, targetW]
-                              textTime = (
-                                  pooled,
-                                  repeated(MLXArray(converting: timeIds).reshaped(1, -1), count: pooled.count, axis: 0)
-                              )
+                              let singleTime = MLXArray(converting: timeIds).reshaped(1, -1)
+                              textTimePos = (pooled[0..<1], singleTime)
+                              if condNeg != nil && pooled.dim(0) > 1 {
+                                  textTimeNeg = (pooled[1..<2], singleTime)
+                              }
                           }
 
                           var xt = sampler.samplePrior(shape: [1] + latentSize + [latentChannels], dType: dType)
@@ -381,16 +495,33 @@ jobs:
                                   ? "Ảnh \\(frameNum)/\\(items.count) — bước \\(stepIdx + 1)/\\(steps)..."
                                   : "Đang vẽ bước \\(stepIdx + 1)/\\(steps)...")
 
-                              autoreleasepool {
-                                  let xtUnet = cfgWeight > 1 ? concatenated([xt, xt], axis: 0) : xt
-                                  let tUnet = broadcast(t, to: [xtUnet.count])
-                                  var epsPred = unet!(xtUnet, timestep: tUnet, encoderX: encoded.conditioning, textTime: textTime)
-                                  if cfgWeight > 1 {
-                                      let (epsText, epsNeg) = epsPred.split()
-                                      epsPred = epsNeg + cfgWeight * (epsText - epsNeg)
+                              let tSingle = broadcast(t, to: [1])
+                              if let condNeg {
+                                  let epsText: MLXArray = autoreleasepool {
+                                      let out = unet!(xt, timestep: tSingle, encoderX: condPos, textTime: textTimePos)
+                                      eval(out)
+                                      return out
                                   }
-                                  xt = sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)
-                                  eval(xt)
+                                  Memory.clearCache()
+
+                                  let epsNeg: MLXArray = autoreleasepool {
+                                      let out = unet!(xt, timestep: tSingle, encoderX: condNeg, textTime: textTimeNeg)
+                                      eval(out)
+                                      return out
+                                  }
+                                  Memory.clearCache()
+
+                                  autoreleasepool {
+                                      let epsPred = epsNeg + cfgWeight * (epsText - epsNeg)
+                                      xt = sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)
+                                      eval(xt)
+                                  }
+                              } else {
+                                  autoreleasepool {
+                                      let epsPred = unet!(xt, timestep: tSingle, encoderX: condPos, textTime: textTimePos)
+                                      xt = sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)
+                                      eval(xt)
+                                  }
                               }
                               Memory.clearCache()
                           }
@@ -400,26 +531,25 @@ jobs:
                   }
                   encodedPrompts.removeAll()
                   Memory.clearCache()
-                  Thread.sleep(forTimeInterval: 0.25)
+                  Thread.sleep(forTimeInterval: 0.35)
 
-                  // PHA 3: Chỉ nạp Decoder của VAE (không nạp VAEncoder), giải mã từng block/ảnh một
+                  // PHA 3: Nạp riêng Decoder của VAE và giải mã theo mảnh (Tiled Decode)
                   onProgress("Pha 3/3: Đang nạp bộ giải mã VAE...")
                   try autoreleasepool {
                       var vae: DecoderOnlyAutoencoder? = try loadDecoderOnlyAutoEncoder(client: client, configuration: self)
-                      eval(vae!)
-                      Memory.clearCache()
+                      let vaeParams = vae!.parameters().flattened()
+                      for start in stride(from: 0, to: vaeParams.count, by: 32) {
+                          let end = min(start + 32, vaeParams.count)
+                          eval(vaeParams[start..<end].map(\\.1))
+                          Memory.clearCache()
+                      }
 
                       for (idx, latent) in latentsOut.enumerated() {
                           onProgress(items.count > 1
-                              ? "Pha 3/3: Đang giải mã ảnh \\(idx + 1)/\\(items.count)..."
-                              : "Đang hoàn thiện chi tiết ảnh...")
-                          try autoreleasepool {
-                              var decoded: MLXArray? = vae!.decode(latent)
-                              decoded = clip(decoded! / 2 + 0.5, min: 0, max: 1)
-                              eval(decoded!)
-                              try onDecodedImage(idx, decoded!)
-                              decoded = nil
-                          }
+                              ? "Pha 3/3: Đang ghép ảnh \\(idx + 1)/\\(items.count)..."
+                              : "Pha 3/3: Đang giải mã chi tiết ảnh...")
+                          let result = Self.tiledDecodeRGBA(vae: vae!, latent: latent)
+                          try onDecodedRGBA(idx, result.data, result.width, result.height)
                           Memory.clearCache()
                       }
                       vae = nil
