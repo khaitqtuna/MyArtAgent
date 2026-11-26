@@ -5,33 +5,36 @@ import MLX
 import StableDiffusion
 
 enum DiffusionModelPreset: String, CaseIterable, Identifiable {
+    case meinaMixSD15 = "digiplay/MeinaMix_v11"
+    case dreamShaperSD15 = "Lykon/dreamshaper-8"
+    case majicMixSD15 = "digiplay/majicMIX_realistic_v7"
+    case dreamShaperXLTurbo = "Lykon/dreamshaper-xl-v2-turbo"
+    case sdxlTurbo = "stabilityai/sdxl-turbo"
     case illustriousXL = "OnomaAIResearch/Illustrious-xl-early-release-v0"
     case ponyV6XL = "misri/ponyDiffusionV6XL"
     case animagineXL = "cagliostrolab/animagine-xl-3.1"
-    case dreamShaperXLTurbo = "Lykon/dreamshaper-xl-v2-turbo"
-    case sdxlTurbo = "stabilityai/sdxl-turbo"
-    case meinaMixSD15 = "digiplay/MeinaMix_v11"
-    case dreamShaperSD15 = "Lykon/dreamshaper-8"
     case custom = "custom"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .illustriousXL:
-            return "Illustrious-XL (Chuẩn Pixiv / Tensor.Art)"
-        case .ponyV6XL:
-            return "Pony Diffusion V6 XL (Anime / Concept)"
-        case .animagineXL:
-            return "Animagine XL 3.1 (Pixiv / Anime)"
-        case .dreamShaperXLTurbo:
-            return "DreamShaper XL Turbo (Digital Art, 6 steps)"
-        case .sdxlTurbo:
-            return "SDXL Turbo (Nhanh, 4 steps)"
         case .meinaMixSD15:
-            return "MeinaMix v11 (SD 1.5 nhẹ RAM)"
+            return "MeinaMix v11 (Pixiv / Anime • Nhẹ RAM nhất)"
         case .dreamShaperSD15:
-            return "DreamShaper 8 (SD 1.5 nhẹ RAM)"
+            return "DreamShaper 8 (DeviantArt / Fantasy • Nhẹ RAM)"
+        case .majicMixSD15:
+            return "majicMIX v7 (Ảnh tả thực • Nhẹ RAM)"
+        case .dreamShaperXLTurbo:
+            return "DreamShaper XL Turbo (SDXL 6 steps)"
+        case .sdxlTurbo:
+            return "SDXL Turbo (SDXL nhanh 4 steps)"
+        case .illustriousXL:
+            return "Illustrious-XL (SDXL Pixiv / Tensor.Art)"
+        case .ponyV6XL:
+            return "Pony Diffusion V6 XL (SDXL Anime / Concept)"
+        case .animagineXL:
+            return "Animagine XL 3.1 (SDXL Pixiv / Anime)"
         case .custom:
             return "Tùy chỉnh (Custom Hugging Face ID)"
         }
@@ -39,7 +42,7 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
 
     var isSDXL: Bool {
         switch self {
-        case .meinaMixSD15, .dreamShaperSD15:
+        case .meinaMixSD15, .dreamShaperSD15, .majicMixSD15:
             return false
         default:
             return true
@@ -50,7 +53,7 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
         switch self {
         case .sdxlTurbo: return 4
         case .dreamShaperXLTurbo: return 6
-        case .animagineXL, .illustriousXL, .meinaMixSD15, .dreamShaperSD15, .custom: return 20
+        case .meinaMixSD15, .dreamShaperSD15, .majicMixSD15, .animagineXL, .illustriousXL, .custom: return 20
         case .ponyV6XL: return 22
         }
     }
@@ -61,7 +64,7 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
         case .dreamShaperXLTurbo: return 2.0
         case .animagineXL, .illustriousXL, .custom: return 6.0
         case .ponyV6XL: return 6.5
-        case .meinaMixSD15, .dreamShaperSD15: return 7.5
+        case .meinaMixSD15, .dreamShaperSD15, .majicMixSD15: return 7.5
         }
     }
 
@@ -73,7 +76,7 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
             return "masterpiece, best quality, newest, absurdres"
         case .animagineXL:
             return "masterpiece, best quality, very aesthetic, absurdres"
-        case .dreamShaperXLTurbo, .meinaMixSD15, .dreamShaperSD15, .custom:
+        case .dreamShaperXLTurbo, .meinaMixSD15, .dreamShaperSD15, .majicMixSD15, .custom:
             return "masterpiece, best quality, highly detailed"
         case .sdxlTurbo:
             return ""
@@ -106,6 +109,8 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
             return "score_6, score_5, score_4, lowres, bad anatomy, bad hands, missing fingers, extra fingers, deformed, worst quality, low quality, blurry, watermark, signature, text"
         case .animagineXL, .illustriousXL:
             return "nsfw, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry"
+        case .majicMixSD15:
+            return "lowres, bad anatomy, bad hands, extra fingers, deformed, plastic skin, cgi, 3d render, blurry, worst quality, low quality, watermark, text"
         case .dreamShaperXLTurbo, .meinaMixSD15, .dreamShaperSD15, .custom:
             return "lowres, bad anatomy, bad hands, extra fingers, missing fingers, deformed, worst quality, low quality, jpeg artifacts, blurry, signature, watermark, text"
         }
@@ -113,20 +118,31 @@ enum DiffusionModelPreset: String, CaseIterable, Identifiable {
 }
 
 enum AspectRatio: String, CaseIterable, Identifiable {
-    case square = "Vuông (1024×1024)"
-    case portrait = "Dọc chân dung (832×1216)"
-    case landscape = "Ngang phong cảnh (1216×832)"
+    case square = "Vuông (1:1)"
+    case portrait = "Dọc chân dung (2:3)"
+    case landscape = "Ngang phong cảnh (3:2)"
 
     var id: String { rawValue }
 
-    func latentSize(isSDXL: Bool) -> [Int] {
+    func latentSize(isSDXL: Bool, lowRAMMode: Bool) -> [Int] {
+        if !isSDXL {
+            switch self {
+            case .square: return [64, 64]       // 512x512
+            case .portrait: return [96, 64]     // 512x768
+            case .landscape: return [64, 96]    // 768x512
+            }
+        }
+        if lowRAMMode {
+            switch self {
+            case .square: return [96, 96]       // 768x768 (giảm ~44% RAM activation)
+            case .portrait: return [112, 80]    // 640x896
+            case .landscape: return [80, 112]   // 896x640
+            }
+        }
         switch self {
-        case .square:
-            return isSDXL ? [128, 128] : [64, 64]
-        case .portrait:
-            return isSDXL ? [152, 104] : [96, 64]
-        case .landscape:
-            return isSDXL ? [104, 152] : [64, 96]
+        case .square: return [128, 128]         // 1024x1024
+        case .portrait: return [152, 104]       // 832x1216
+        case .landscape: return [104, 152]      // 1216x832
         }
     }
 }
@@ -165,6 +181,7 @@ final class ArtEngine: ObservableObject {
         imageCount: Int,
         generationMode: GenerationMode,
         lockSequenceSeed: Bool,
+        lowRAMMode: Bool,
         negativePrompt: String,
         useLLM: Bool,
         primaryLLM: LLMModelPreset,
@@ -228,8 +245,10 @@ final class ArtEngine: ObservableObject {
                     await MainActor.run {
                         self.expandedPrompt = previewText
                         self.downloadProgress = 0
-                        self.statusMessage = "Đã chuẩn bị xong prompt! Đang chuyển sang GPU vẽ tranh..."
+                        self.statusMessage = "Đã chuẩn bị xong prompt! Đang dọn RAM trước khi vẽ..."
                     }
+                    // Nhường 1 nhịp ngắn để ARC/Metal thu hồi bộ nhớ của LLM trước khi nạp Diffusion
+                    try? await Task.sleep(for: .milliseconds(300))
                 } else {
                     resolvedPrompts = PromptAgent.buildDirectPrompts(
                         userIdea: trimmed,
@@ -256,7 +275,8 @@ final class ArtEngine: ObservableObject {
                     aspectRatio: aspectRatio,
                     steps: steps,
                     negativePrompt: negativePrompt,
-                    lockSequenceSeed: isSequence && lockSequenceSeed
+                    lockSequenceSeed: isSequence && lockSequenceSeed,
+                    lowRAMMode: lowRAMMode
                 )
 
                 await MainActor.run {
@@ -281,35 +301,29 @@ final class ArtEngine: ObservableObject {
         preset: DiffusionModelPreset,
         customRepoId: String,
         steps: Int
-    ) async throws -> (config: StableDiffusionConfiguration, isSDXL: Bool) {
+    ) async throws -> (config: StableDiffusionConfiguration, isSDXL: Bool, cfgWeight: Float) {
         switch preset {
-        case .sdxlTurbo:
+        case .sdxlTurbo, .dreamShaperXLTurbo, .ponyV6XL:
             return (StableDiffusionConfiguration.sdxl(
                 id: preset.rawValue,
                 useFP16Suffix: true,
                 cfgWeight: preset.cfgWeight,
                 steps: steps
-            ), true)
-        case .dreamShaperXLTurbo, .ponyV6XL:
-            return (StableDiffusionConfiguration.sdxl(
-                id: preset.rawValue,
-                useFP16Suffix: true,
-                cfgWeight: preset.cfgWeight,
-                steps: steps
-            ), true)
+            ), true, preset.cfgWeight)
         case .animagineXL, .illustriousXL:
             return (StableDiffusionConfiguration.sdxl(
                 id: preset.rawValue,
                 useFP16Suffix: false,
                 cfgWeight: preset.cfgWeight,
                 steps: steps
-            ), true)
-        case .meinaMixSD15, .dreamShaperSD15:
+            ), true, preset.cfgWeight)
+        case .meinaMixSD15, .dreamShaperSD15, .majicMixSD15:
             return (StableDiffusionConfiguration.sd15FP16(
                 id: preset.rawValue,
+                useFP16Suffix: true,
                 cfgWeight: preset.cfgWeight,
                 steps: steps
-            ), false)
+            ), false, preset.cfgWeight)
         case .custom:
             let metadata = await inspectCustomRepo(repoId: customRepoId)
             if metadata.isSDXL {
@@ -318,14 +332,14 @@ final class ArtEngine: ObservableObject {
                     useFP16Suffix: metadata.useFP16Suffix,
                     cfgWeight: preset.cfgWeight,
                     steps: steps
-                ), true)
+                ), true, preset.cfgWeight)
             } else {
                 return (StableDiffusionConfiguration.sd15FP16(
                     id: customRepoId,
                     useFP16Suffix: metadata.useFP16Suffix,
                     cfgWeight: 7.5,
                     steps: steps
-                ), false)
+                ), false, 7.5)
             }
         }
     }
@@ -357,7 +371,8 @@ final class ArtEngine: ObservableObject {
         aspectRatio: AspectRatio,
         steps: Int,
         negativePrompt: String,
-        lockSequenceSeed: Bool
+        lockSequenceSeed: Bool,
+        lowRAMMode: Bool
     ) async throws {
         // Ép giới hạn cache GPU xuống 20 MB để tránh bị iPadOS Jetsam kill app
         Memory.cacheLimit = 20 * 1024 * 1024
@@ -370,7 +385,6 @@ final class ArtEngine: ObservableObject {
             steps: steps
         )
         let config = resolved.config
-        let loadConfig = LoadConfiguration(float16: true, quantize: true)
 
         try await config.download { progress in
             let fraction = progress.fractionCompleted
@@ -383,108 +397,53 @@ final class ArtEngine: ObservableObject {
             }
         }
 
-        await MainActor.run {
-            self.statusMessage = "Đang nạp model ở chế độ tiết kiệm RAM..."
-        }
-
-        var generator = try config.textToImageGenerator(configuration: loadConfig)
-        guard generator != nil else {
-            throw NSError(
-                domain: "ArtEngine",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Không thể nạp model vẽ vào bộ nhớ."]
+        let baseSeed = UInt64.random(in: 0 ..< UInt64.max)
+        let cleanedNegative = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = prompts.enumerated().map { idx, promptText in
+            SequencePromptItem(
+                prompt: promptText,
+                negativePrompt: cleanedNegative,
+                seed: lockSequenceSeed ? baseSeed : (baseSeed &+ UInt64(idx))
             )
         }
 
-        // Không gọi ensureLoaded() để tránh nạp cùng lúc toàn bộ mạng nơ-ron vào RAM
-        let baseSeed = UInt64.random(in: 0 ..< UInt64.max)
-        let totalImages = prompts.count
-        var pendingLatents: [(index: Int, prompt: String, seed: UInt64, latent: MLXArray)] = []
-        let targetLatentSize = aspectRatio.latentSize(isSDXL: resolved.isSDXL)
+        let targetLatentSize = aspectRatio.latentSize(isSDXL: resolved.isSDXL, lowRAMMode: lowRAMMode)
+        let unetBits = (resolved.isSDXL && lowRAMMode) ? 4 : 8
 
-        for (idx, promptText) in prompts.enumerated() {
-            let imageIndex = idx + 1
-            let frameSeed = lockSequenceSeed ? baseSeed : (baseSeed &+ UInt64(idx))
-
-            var params = config.defaultParameters()
-            params.prompt = promptText
-            params.negativePrompt = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            params.steps = steps
-            params.latentSize = targetLatentSize
-            params.seed = frameSeed
-
-            await MainActor.run {
-                self.statusMessage = totalImages > 1
-                    ? "Ảnh \(imageIndex)/\(totalImages) — bước 1/\(steps)..."
-                    : "Đang vẽ bước 1/\(steps)..."
-            }
-
-            var latents = Optional(generator!.generateLatents(parameters: params))
-            var current = latents?.next() ?? nil
-            if let first = current {
-                eval(first)
-                Memory.clearCache()
-            }
-            var currentStep = 1
-
-            while let next = (latents?.next() ?? nil) {
-                eval(next)
-                Memory.clearCache()
-                current = next
-                currentStep += 1
-                let stepCopy = currentStep
+        try config.runLowMemorySequence(
+            items: items,
+            isSDXL: resolved.isSDXL,
+            steps: steps,
+            cfgWeight: resolved.cfgWeight,
+            latentSize: targetLatentSize,
+            unetBits: unetBits,
+            onProgress: { status in
                 Task { @MainActor [weak self] in
-                    self?.statusMessage = totalImages > 1
-                        ? "Ảnh \(imageIndex)/\(totalImages) — bước \(stepCopy)/\(steps)..."
-                        : "Đang vẽ bước \(stepCopy)/\(steps)..."
+                    self?.statusMessage = status
+                }
+            },
+            onDecodedImage: { index, decoded in
+                let cgImage = try autoreleasepool {
+                    try ArtEngine.makeCGImage(from: decoded)
+                }
+                let uiImage = UIImage(cgImage: cgImage)
+                let promptText = items[index].prompt
+                let seedValue = items[index].seed
+                Task { @MainActor [weak self] in
+                    let artItem = GeneratedArtItem(
+                        index: index + 1,
+                        image: uiImage,
+                        prompt: promptText,
+                        seed: seedValue
+                    )
+                    self?.generatedItems.append(artItem)
+                    self?.generatedImage = uiImage
                 }
             }
-
-            latents = nil
-            Memory.clearCache()
-
-            guard let finalXt = current else {
-                throw NSError(
-                    domain: "ArtEngine",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Không tạo được dữ liệu ảnh đầu ra ở ảnh \(imageIndex)."]
-                )
-            }
-            pendingLatents.append((index: imageIndex, prompt: promptText, seed: frameSeed, latent: finalXt))
-        }
-
-        let decoder = generator!.detachedDecoder()
-        // Giải phóng hoàn toàn UNet và TextEncoder trước khi giải mã ảnh để tối ưu RAM
-        generator = nil
-        Memory.clearCache()
-
-        for entry in pendingLatents {
-            await MainActor.run {
-                self.statusMessage = totalImages > 1
-                    ? "Đang giải mã chi tiết ảnh \(entry.index)/\(totalImages)..."
-                    : "Đang hoàn thiện chi tiết ảnh..."
-            }
-
-            let decoded = decoder(entry.latent)
-            eval(decoded)
-            let cgImage = try makeCGImage(from: decoded)
-            Memory.clearCache()
-
-            let uiImage = UIImage(cgImage: cgImage)
-            let item = GeneratedArtItem(
-                index: entry.index,
-                image: uiImage,
-                prompt: entry.prompt,
-                seed: entry.seed
-            )
-            await MainActor.run {
-                self.generatedItems.append(item)
-                self.generatedImage = uiImage
-            }
-        }
+        )
     }
 
-    private nonisolated func makeCGImage(from array: MLXArray) throws -> CGImage {
+    private nonisolated static func makeCGImage(from array: MLXArray) throws -> CGImage {
         let imageArray = array.ndim == 4 ? array[0] : array
         guard imageArray.ndim == 3 else {
             throw NSError(

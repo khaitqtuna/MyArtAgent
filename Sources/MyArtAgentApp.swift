@@ -13,19 +13,20 @@ struct MyArtAgentApp: App {
 struct ContentView: View {
     @StateObject private var engine = ArtEngine()
     @State private var ideaText: String = ""
-    @State private var selectedPreset: DiffusionModelPreset = .illustriousXL
+    @State private var selectedPreset: DiffusionModelPreset = .meinaMixSD15
     @State private var customRepoId: String = ""
     @State private var selectedAspectRatio: AspectRatio = .square
     @State private var selectedStyle: ArtStyle = .anime
-    @State private var steps: Int = DiffusionModelPreset.illustriousXL.recommendedSteps
+    @State private var steps: Int = DiffusionModelPreset.meinaMixSD15.recommendedSteps
     @State private var imageCount: Int = 1
     @State private var generationMode: GenerationMode = .sequenceGrowth
     @State private var lockSequenceSeed: Bool = true
-    @State private var negativePrompt: String = DiffusionModelPreset.illustriousXL.defaultNegativePrompt
+    @State private var lowRAMMode: Bool = true
+    @State private var negativePrompt: String = DiffusionModelPreset.meinaMixSD15.defaultNegativePrompt
     @State private var useLLM: Bool = true
     @State private var primaryLLM: LLMModelPreset = PromptAgent.defaultPrimaryModel
     @State private var refinerLLM: LLMModelPreset = PromptAgent.defaultRefinerModel
-    @State private var llmPipelineMode: LLMPipelineMode = .dualEnsemble
+    @State private var llmPipelineMode: LLMPipelineMode = .single
     @State private var savedNotice: String = ""
 
     var body: some View {
@@ -90,7 +91,7 @@ struct ContentView: View {
                                     }
                                 }
 
-                                Text("Hai LLM chạy tuần tự và tự giải phóng RAM hoàn toàn trước khi vẽ để prompt vừa sát nghĩa, không bịa chi tiết vừa an toàn RAM iPadOS.")
+                                Text("Các LLM chạy tuần tự từng mô hình rồi giải phóng RAM hoàn toàn trước khi vẽ để tránh vượt trần RAM iPadOS.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -168,6 +169,9 @@ struct ContentView: View {
                         }
                     }
 
+                    Toggle("Chế độ tiết kiệm RAM iPad (3 pha tuần tự, 768px/4-bit SDXL)", isOn: $lowRAMMode)
+                        .font(.subheadline)
+
                     DisclosureGroup("Negative Prompt (Chống lỗi nét / mờ)") {
                         VStack(alignment: .leading, spacing: 6) {
                             TextField("Nhập những thứ muốn loại trừ...", text: $negativePrompt, axis: .vertical)
@@ -199,6 +203,7 @@ struct ContentView: View {
                             imageCount: imageCount,
                             generationMode: generationMode,
                             lockSequenceSeed: lockSequenceSeed,
+                            lowRAMMode: lowRAMMode,
                             negativePrompt: negativePrompt,
                             useLLM: useLLM,
                             primaryLLM: primaryLLM,

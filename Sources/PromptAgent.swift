@@ -42,7 +42,7 @@ enum LLMPipelineMode: String, CaseIterable, Identifiable {
 }
 
 struct PromptAgent {
-    static let defaultPrimaryModel: LLMModelPreset = .qwen35_4B
+    static let defaultPrimaryModel: LLMModelPreset = .qwen3_4B
     static let defaultRefinerModel: LLMModelPreset = .phi4Mini
 
     static func generatePrompts(
@@ -223,6 +223,7 @@ struct PromptAgent {
 
         let generateParameters = GenerateParameters(
             maxTokens: maxTokens,
+            maxKVSize: 1024,
             temperature: temperature,
             topP: 0.85,
             repetitionPenalty: 1.08
@@ -241,6 +242,7 @@ struct PromptAgent {
         session = nil
         container = nil
         Memory.clearCache()
+        try? await Task.sleep(for: .milliseconds(250))
 
         return stripThinkingTags(rawOutput)
     }
