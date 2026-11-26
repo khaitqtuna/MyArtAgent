@@ -167,7 +167,9 @@ final class ArtEngine: ObservableObject {
         lockSequenceSeed: Bool,
         negativePrompt: String,
         useLLM: Bool,
-        llmModelId: String
+        primaryLLM: LLMModelPreset,
+        refinerLLM: LLMModelPreset,
+        llmPipelineMode: LLMPipelineMode
     ) {
         let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
@@ -205,7 +207,9 @@ final class ArtEngine: ObservableObject {
                         tagFormatted: preset.prefersTagFormat,
                         count: targetCount,
                         sequenceGrowth: isSequence,
-                        modelId: llmModelId
+                        primaryModel: primaryLLM,
+                        refinerModel: refinerLLM,
+                        pipelineMode: llmPipelineMode
                     ) { status in
                         Task { @MainActor [weak self] in
                             self?.statusMessage = status

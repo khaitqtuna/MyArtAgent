@@ -23,7 +23,9 @@ struct ContentView: View {
     @State private var lockSequenceSeed: Bool = true
     @State private var negativePrompt: String = DiffusionModelPreset.illustriousXL.defaultNegativePrompt
     @State private var useLLM: Bool = true
-    @State private var llmModelId: String = PromptAgent.defaultModelId
+    @State private var primaryLLM: LLMModelPreset = PromptAgent.defaultPrimaryModel
+    @State private var refinerLLM: LLMModelPreset = PromptAgent.defaultRefinerModel
+    @State private var llmPipelineMode: LLMPipelineMode = .dualEnsemble
     @State private var savedNotice: String = ""
 
     var body: some View {
@@ -51,15 +53,44 @@ struct ContentView: View {
                     Toggle("Bật LLM tối ưu prompt (dịch & tạo chuỗi)", isOn: $useLLM)
 
                     if useLLM {
-                        DisclosureGroup("Tùy chỉnh mô hình LLM (Hugging Face)") {
-                            VStack(alignment: .leading, spacing: 6) {
-                                TextField("Hugging Face MLX Model ID", text: $llmModelId)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.caption)
+                        DisclosureGroup("Tùy chỉnh mô hình LLM (Danh sách chọn sẵn)") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Chế độ phối hợp:")
+                                    Spacer()
+                                    Picker("Chế độ phối hợp", selection: $llmPipelineMode) {
+                                        ForEach(LLMPipelineMode.allCases) { mode in
+                                            Text(mode.rawValue).tag(mode)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                }
 
-                                Text("Mặc định dùng Qwen3-4B-Instruct-2507 (4-bit, ~2.1 GB) dịch sát ý, ít bịa thêm chi tiết và lập chuỗi Sequence Growth chính xác.")
+                                HStack {
+                                    Text(llmPipelineMode == .dualEnsemble ? "LLM 1 (Dịch & Lập ý):" : "Mô hình LLM:")
+                                    Spacer()
+                                    Picker("LLM chính", selection: $primaryLLM) {
+                                        ForEach(LLMModelPreset.allCases) { model in
+                                            Text(model.displayName).tag(model)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                }
+
+                                if llmPipelineMode == .dualEnsemble {
+                                    HStack {
+                                        Text("LLM 2 (Kiểm lỗi & Tinh chỉnh):")
+                                        Spacer()
+                                        Picker("LLM tinh chỉnh", selection: $refinerLLM) {
+                                            ForEach(LLMModelPreset.allCases) { model in
+                                                Text(model.displayName).tag(model)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                    }
+                                }
+
+                                Text("Hai LLM chạy tuần tự và tự giải phóng RAM hoàn toàn trước khi vẽ để prompt vừa sát nghĩa, không bịa chi tiết vừa an toàn RAM iPadOS.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -170,7 +201,9 @@ struct ContentView: View {
                             lockSequenceSeed: lockSequenceSeed,
                             negativePrompt: negativePrompt,
                             useLLM: useLLM,
-                            llmModelId: llmModelId
+                            primaryLLM: primaryLLM,
+                            refinerLLM: refinerLLM,
+                            llmPipelineMode: llmPipelineMode
                         )
                     } label: {
                         Text(engine.isGenerating ? "Đang xử lý..." : (imageCount > 1 ? "Tạo chuỗi \(imageCount) ảnh AI" : "Tạo tranh AI"))
