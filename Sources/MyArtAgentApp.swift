@@ -13,9 +13,15 @@ struct MyArtAgentApp: App {
 struct ContentView: View {
     @StateObject private var engine = ArtEngine()
     @State private var ideaText: String = ""
-    @State private var selectedImageModel: ImageModel = .meinaMix
+    @State private var selectedPreset: DiffusionModelPreset = .illustriousXL
+    @State private var customRepoId: String = ""
+    @State private var selectedAspectRatio: AspectRatio = .square
     @State private var selectedStyle: ArtStyle = .anime
-    @State private var steps: Int = 20
+    @State private var steps: Int = DiffusionModelPreset.illustriousXL.recommendedSteps
+    @State private var imageCount: Int = 1
+    @State private var generationMode: GenerationMode = .sequenceGrowth
+    @State private var lockSequenceSeed: Bool = true
+    @State private var negativePrompt: String = DiffusionModelPreset.illustriousXL.defaultNegativePrompt
     @State private var useLLM: Bool = true
     @State private var llmModelId: String = PromptAgent.defaultModelId
     @State private var savedNotice: String = ""
@@ -23,17 +29,17 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(useLLM
-                             ? "Nhập ý tưởng tranh (tiếng Việt hay tiếng Anh đều được):"
-                             : "Nhập thẳng Prompt tiếng Anh (Direct Mode):")
+                             ? "Nhập ý tưởng tranh hoặc kịch bản chuỗi (tiếng Việt/Anh):"
+                             : "Nhập thẳng Prompt tiếng Anh (mỗi dòng 1 giai đoạn nếu tạo chuỗi):")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         TextField(
                             useLLM
-                                ? "VD: Một cô gái cầm đèn lồng giữa phố đêm mưa ở Tokyo"
+                                ? "VD: Quá trình một hạt mầm mọc thành cây cổ thụ phát sáng dưới ánh trăng"
                                 : "VD: 1girl holding a paper lantern in a rainy Tokyo street at night",
                             text: $ideaText,
                             axis: .vertical
@@ -42,7 +48,7 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                     }
 
-                    Toggle("Bật LLM tối ưu prompt (dịch & viết chi tiết)", isOn: $useLLM)
+                    Toggle("Bật LLM tối ưu prompt (dịch & tạo chuỗi)", isOn: $useLLM)
 
                     if useLLM {
                         DisclosureGroup("Tùy chỉnh mô hình LLM (Hugging Face)") {
@@ -53,7 +59,7 @@ struct ContentView: View {
                                     .textFieldStyle(.roundedBorder)
                                     .font(.caption)
 
-                                Text("Mặc định dùng Qwen3-4B-Instruct-2507 (4-bit, ~2.1 GB) dịch sát ý, ít bịa thêm chi tiết. Có thể đổi sang model MLX 4-bit khác.")
+                                Text("Mặc định dùng Qwen3-4B-Instruct-2507 (4-bit, ~2.1 GB) dịch sát ý, ít bịa thêm chi tiết và lập chuỗi Sequence Growth chính xác.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -63,11 +69,34 @@ struct ContentView: View {
                     }
 
                     HStack {
-                        Text("Mô hình vẽ:")
+                        Text("Model vẽ:")
                         Spacer()
-                        Picker("Mô hình vẽ", selection: $selectedImageModel) {
-                            ForEach(ImageModel.allCases) { model in
-                                Text(model.displayName).tag(model)
+                        Picker("Model vẽ", selection: $selectedPreset) {
+                            ForEach(DiffusionModelPreset.allCases) { preset in
+                                Text(preset.displayName).tag(preset)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    .onChange(of: selectedPreset) { _, newPreset in
+                        steps = newPreset.recommendedSteps
+                        negativePrompt = newPreset.defaultNegativePrompt
+                    }
+
+                    if selectedPreset == .custom {
+                        TextField("Nhập Hugging Face Repo ID (VD: user/my-sdxl-lora)", text: $customRepoId)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption)
+                    }
+
+                    HStack {
+                        Text("Tỷ lệ khung hình:")
+                        Spacer()
+                        Picker("Tỷ lệ khung hình", selection: $selectedAspectRatio) {
+                            ForEach(AspectRatio.allCases) { ratio in
+                                Text(ratio.rawValue).tag(ratio)
                             }
                         }
                         .pickerStyle(.menu)
@@ -84,25 +113,76 @@ struct ContentView: View {
                         .pickerStyle(.menu)
                     }
 
-                    Stepper("Số bước vẽ (Steps): \(steps)", value: $steps, in: 10...35, step: 2)
+                    Stepper("Số bước vẽ (Steps): \(steps)", value: $steps, in: 2...40, step: 1)
+
+                    Stepper("Số lượng ảnh tạo ra: \(imageCount)", value: $imageCount, in: 1...8, step: 1)
+
+                    if imageCount > 1 {
+                        VStack(spacing: 10) {
+                            HStack {
+                                Text("Chế độ nhiều ảnh:")
+                                Spacer()
+                                Picker("Chế độ nhiều ảnh", selection: $generationMode) {
+                                    ForEach(GenerationMode.allCases) { mode in
+                                        Text(mode.rawValue).tag(mode)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+
+                            if generationMode == .sequenceGrowth {
+                                Toggle("Giữ Seed nhất quán giữa các khung hình", isOn: $lockSequenceSeed)
+                                    .font(.subheadline)
+                            }
+                        }
+                    }
+
+                    DisclosureGroup("Negative Prompt (Chống lỗi nét / mờ)") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            TextField("Nhập những thứ muốn loại trừ...", text: $negativePrompt, axis: .vertical)
+                                .lineLimit(2...5)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+
+                            if selectedPreset == .sdxlTurbo {
+                                Text("SDXL Turbo dùng CFG = 0.0 nên không áp dụng Negative Prompt.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    .font(.subheadline)
 
                     Button {
                         savedNotice = ""
-                        engine.generateImage(
+                        engine.generateImages(
                             idea: ideaText,
-                            imageModel: selectedImageModel,
+                            preset: selectedPreset,
+                            customRepoId: customRepoId,
+                            aspectRatio: selectedAspectRatio,
                             style: selectedStyle,
                             steps: steps,
+                            imageCount: imageCount,
+                            generationMode: generationMode,
+                            lockSequenceSeed: lockSequenceSeed,
+                            negativePrompt: negativePrompt,
                             useLLM: useLLM,
                             llmModelId: llmModelId
                         )
                     } label: {
-                        Text(engine.isGenerating ? "Đang xử lý..." : "Tạo tranh AI")
+                        Text(engine.isGenerating ? "Đang xử lý..." : (imageCount > 1 ? "Tạo chuỗi \(imageCount) ảnh AI" : "Tạo tranh AI"))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(engine.isGenerating || ideaText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        engine.isGenerating
+                        || ideaText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || (selectedPreset == .custom && customRepoId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    )
 
                     if engine.isGenerating {
                         if engine.downloadProgress > 0 && engine.downloadProgress < 1 {
@@ -119,7 +199,7 @@ struct ContentView: View {
 
                     if !engine.expandedPrompt.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Prompt tiếng Anh do LLM tạo:")
+                            Text(imageCount > 1 ? "Kịch bản chuỗi prompt:" : "Prompt tiếng Anh do LLM tạo:")
                                 .font(.caption)
                                 .bold()
                                 .foregroundStyle(.secondary)
@@ -133,23 +213,47 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
 
-                    if let image = engine.generatedImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .shadow(radius: 4)
+                    if !engine.generatedItems.isEmpty {
+                        VStack(spacing: 14) {
+                            ForEach(engine.generatedItems) { item in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    if engine.generatedItems.count > 1 {
+                                        Text("Khung hình \(item.index)/\(engine.generatedItems.count)")
+                                            .font(.caption)
+                                            .bold()
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                        Button("Lưu vào Thư viện Ảnh") {
-                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                            savedNotice = "Đã lưu vào Thư viện Ảnh của iPad!"
-                        }
-                        .buttonStyle(.bordered)
+                                    Image(uiImage: item.image)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                                        .shadow(radius: 4)
 
-                        if !savedNotice.isEmpty {
-                            Text(savedNotice)
-                                .font(.footnote)
-                                .foregroundStyle(.green)
+                                    if engine.generatedItems.count > 1 {
+                                        Text(item.prompt)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(3)
+                                    }
+                                }
+                            }
+
+                            Button(engine.generatedItems.count > 1 ? "Lưu tất cả \(engine.generatedItems.count) ảnh vào Thư viện" : "Lưu vào Thư viện Ảnh") {
+                                for item in engine.generatedItems {
+                                    UIImageWriteToSavedPhotosAlbum(item.image, nil, nil, nil)
+                                }
+                                savedNotice = engine.generatedItems.count > 1
+                                    ? "Đã lưu \(engine.generatedItems.count) ảnh vào Thư viện Ảnh của iPad!"
+                                    : "Đã lưu vào Thư viện Ảnh của iPad!"
+                            }
+                            .buttonStyle(.bordered)
+
+                            if !savedNotice.isEmpty {
+                                Text(savedNotice)
+                                    .font(.footnote)
+                                    .foregroundStyle(.green)
+                            }
                         }
                     }
                 }

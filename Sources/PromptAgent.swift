@@ -6,24 +6,54 @@ import MLXLMCommon
 struct PromptAgent {
     static let defaultModelId = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 
-    static func expandPrompt(
+    static func generatePrompts(
         userIdea: String,
         styleName: String,
+        styleSuffix: String,
+        qualityTags: String,
+        tagsAtStart: Bool,
+        tagFormatted: Bool,
+        count: Int,
+        sequenceGrowth: Bool,
         modelId: String,
         onStatus: @escaping @Sendable (String) -> Void
-    ) async throws -> String {
+    ) async throws -> [String] {
+        let clampedCount = max(1, count)
         let trimmedModel = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetModel = trimmedModel.isEmpty ? defaultModelId : trimmedModel
 
-        let systemPrompt = """
-        You are a precise translator and prompt formatter for Stable Diffusion image generation.
-        Translate the user's idea into natural, vivid English image-generation phrases (maximum 48 words), tailored for the style "\(styleName)".
-        STRICT RULES:
-        1. Preserve ONLY the subjects, actions, objects, clothing, colors, mood, and setting explicitly mentioned or directly implied by the user.
-        2. NEVER invent, add, or hallucinate extra characters, animals, objects, text, or lore that the user did not ask for.
-        3. Describe concrete visual details (composition, lighting, atmosphere) concisely without filler prose.
-        4. Output ONLY the final English prompt text, with no labels, explanations, markdown, or quotation marks.
-        """
+        let isSequence = clampedCount > 1 && sequenceGrowth
+        let formatRule = tagFormatted
+            ? "Use concise comma-separated Danbooru/booru keyword tags (e.g., 1girl, silver hair, dynamic pose, dramatic lighting) rather than long prose."
+            : "Use concise, vivid English visual phrases (subject, pose, composition, lighting, colors, atmosphere)."
+
+        let systemPrompt: String
+        if isSequence {
+            systemPrompt = """
+            You are a precise Stable Diffusion sequence planner and translator.
+            Convert the user's idea into EXACTLY \(clampedCount) progressive English prompts showing a clear, smooth step-by-step sequence/growth from Stage 1 (beginning) to Stage \(clampedCount) (final culmination), matching style "\(styleName)".
+            STRICT RULES:
+            1. Preserve ONLY the subjects, setting, and evolution requested or directly implied by the user. NEVER hallucinate unrelated characters or objects.
+            2. Keep the same main subject, camera framing, and visual identity across all \(clampedCount) stages, changing only what progressively grows or transforms at each stage.
+            3. \(formatRule) Keep each prompt under 42 words.
+            4. Output EXACTLY \(clampedCount) lines formatted strictly as:
+            1: <prompt for stage 1>
+            2: <prompt for stage 2>
+            ...
+            \(clampedCount): <prompt for stage \(clampedCount)>
+            Do NOT include any intro, outro, markdown, or quotation marks.
+            """
+        } else {
+            systemPrompt = """
+            You are a precise translator and prompt formatter for Stable Diffusion image generation.
+            Translate the user's idea into English for the style "\(styleName)" (maximum 45 words).
+            STRICT RULES:
+            1. Preserve ONLY the subjects, actions, objects, clothing, colors, mood, and setting explicitly mentioned or directly implied by the user.
+            2. NEVER invent, add, or hallucinate extra characters, animals, objects, text, or lore that the user did not ask for.
+            3. \(formatRule)
+            4. Output ONLY the final English prompt text, with no labels, explanations, markdown, or quotation marks.
+            """
+        }
 
         // Ép giới hạn cache GPU xuống 20 MB và dọn sạch trước khi nạp LLM
         Memory.cacheLimit = 20 * 1024 * 1024
@@ -40,10 +70,12 @@ struct PromptAgent {
             }
         }
 
-        onStatus("LLM đang dịch & chuẩn hóa prompt tiếng Anh...")
+        onStatus(isSequence
+            ? "LLM đang lập kế hoạch chuỗi \(clampedCount) ảnh tiến triển..."
+            : "LLM đang dịch & chuẩn hóa prompt tiếng Anh...")
 
         let generateParameters = GenerateParameters(
-            maxTokens: 110,
+            maxTokens: isSequence ? min(clampedCount * 75, 550) : 110,
             temperature: 0.2,
             topP: 0.85,
             repetitionPenalty: 1.08
@@ -62,10 +94,141 @@ struct PromptAgent {
         container = nil
         Memory.clearCache()
 
-        let cleaned = rawOutput
+        if isSequence {
+            let parsed = parseSequenceLines(rawOutput, expectedCount: clampedCount, fallbackIdea: userIdea)
+            return parsed.map {
+                applyQualityAndStyle(
+                    corePrompt: $0,
+                    qualityTags: qualityTags,
+                    tagsAtStart: tagsAtStart,
+                    styleSuffix: styleSuffix
+                )
+            }
+        } else {
+            let cleaned = cleanPromptLine(rawOutput)
+            let core = cleaned.isEmpty ? userIdea : cleaned
+            let final = applyQualityAndStyle(
+                corePrompt: core,
+                qualityTags: qualityTags,
+                tagsAtStart: tagsAtStart,
+                styleSuffix: styleSuffix
+            )
+            return Array(repeating: final, count: clampedCount)
+        }
+    }
+
+    static func buildDirectPrompts(
+        userIdea: String,
+        styleSuffix: String,
+        qualityTags: String,
+        tagsAtStart: Bool,
+        count: Int,
+        sequenceGrowth: Bool
+    ) -> [String] {
+        let clampedCount = max(1, count)
+        if clampedCount > 1 && sequenceGrowth {
+            let lines = userIdea
+                .components(separatedBy: .newlines)
+                .map { cleanPromptLine($0) }
+                .filter { !$0.isEmpty }
+
+            if lines.count >= clampedCount {
+                return Array(lines.prefix(clampedCount)).map {
+                    applyQualityAndStyle(
+                        corePrompt: $0,
+                        qualityTags: qualityTags,
+                        tagsAtStart: tagsAtStart,
+                        styleSuffix: styleSuffix
+                    )
+                }
+            }
+
+            return (1...clampedCount).map { stage in
+                let progressRatio = Float(stage - 1) / Float(max(clampedCount - 1, 1))
+                let stageCue: String
+                switch progressRatio {
+                case ..<0.2:
+                    stageCue = "stage 1 of \(clampedCount), initial early beginning phase"
+                case ..<0.55:
+                    stageCue = "stage \(stage) of \(clampedCount), gradual middle growth progression"
+                case ..<0.85:
+                    stageCue = "stage \(stage) of \(clampedCount), advanced transformation phase"
+                default:
+                    stageCue = "stage \(stage) of \(clampedCount), final peak fully developed climax"
+                }
+                return applyQualityAndStyle(
+                    corePrompt: "\(userIdea), \(stageCue)",
+                    qualityTags: qualityTags,
+                    tagsAtStart: tagsAtStart,
+                    styleSuffix: styleSuffix
+                )
+            }
+        }
+
+        let single = applyQualityAndStyle(
+            corePrompt: userIdea,
+            qualityTags: qualityTags,
+            tagsAtStart: tagsAtStart,
+            styleSuffix: styleSuffix
+        )
+        return Array(repeating: single, count: clampedCount)
+    }
+
+    static func applyQualityAndStyle(
+        corePrompt: String,
+        qualityTags: String,
+        tagsAtStart: Bool,
+        styleSuffix: String
+    ) -> String {
+        var result = corePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTags = qualityTags.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !trimmedTags.isEmpty {
+            let lowerResult = result.lowercased()
+            let firstTag = trimmedTags.split(separator: ",").first.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            } ?? ""
+            if firstTag.isEmpty || !lowerResult.contains(firstTag) {
+                result = tagsAtStart
+                    ? "\(trimmedTags), \(result)"
+                    : "\(result), \(trimmedTags)"
+            }
+        }
+
+        if !styleSuffix.isEmpty {
+            result += styleSuffix
+        }
+        return result
+    }
+
+    private static func cleanPromptLine(_ line: String) -> String {
+        var s = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let regex = try? NSRegularExpression(pattern: #"^(?:stage\s*)?\d+\s*[:.)\-]\s*"#, options: [.caseInsensitive]) {
+            let range = NSRange(s.startIndex..., in: s)
+            s = regex.stringByReplacingMatches(in: s, range: range, withTemplate: "")
+        }
+        return s
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    }
 
-        return cleaned.isEmpty ? userIdea : cleaned
+    private static func parseSequenceLines(_ rawOutput: String, expectedCount: Int, fallbackIdea: String) -> [String] {
+        let lines = rawOutput
+            .components(separatedBy: .newlines)
+            .map { cleanPromptLine($0) }
+            .filter { !$0.isEmpty }
+
+        if lines.count >= expectedCount {
+            return Array(lines.prefix(expectedCount))
+        }
+        if lines.isEmpty {
+            return (1...expectedCount).map { "\(fallbackIdea), stage \($0) of \(expectedCount)" }
+        }
+        var padded = lines
+        while padded.count < expectedCount {
+            let nextIndex = padded.count + 1
+            padded.append("\(lines.last ?? fallbackIdea), stage \(nextIndex) of \(expectedCount)")
+        }
+        return padded
     }
 }
