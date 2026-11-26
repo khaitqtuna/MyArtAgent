@@ -131,10 +131,27 @@ jobs:
 
           sd_path = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/StableDiffusion.swift")
           sd_text = sd_path.read_text()
-          target = "MLXArray(converting: [512.0, 512, 0, 0, 512, 512]).reshaped(1, -1)"
-          if target in sd_text:
-              replacement = "MLXArray(converting: [Float(parameters.latentSize[0] * 8), Float(parameters.latentSize[1] * 8), 0, 0, Float(parameters.latentSize[0] * 8), Float(parameters.latentSize[1] * 8)]).reshaped(1, -1)"
-              sd_path.write_text(sd_text.replace(target, replacement))
+          old_block = "\n".join([
+              "        let textTime = (",
+              "            pooledConditioning,",
+              "            repeated(",
+              "                MLXArray(converting: [512.0, 512, 0, 0, 512, 512]).reshaped(1, -1),",
+              "                count: pooledConditioning.count, axis: 0)",
+              "        )",
+          ])
+          new_block = "\n".join([
+              "        let targetH = Float(parameters.latentSize[0] * 8)",
+              "        let targetW = Float(parameters.latentSize[1] * 8)",
+              "        let timeIds: [Float] = [targetH, targetW, 0.0, 0.0, targetH, targetW]",
+              "        let textTime = (",
+              "            pooledConditioning,",
+              "            repeated(",
+              "                MLXArray(converting: timeIds).reshaped(1, -1),",
+              "                count: pooledConditioning.count, axis: 0)",
+              "        )",
+          ])
+          if old_block in sd_text:
+              sd_path.write_text(sd_text.replace(old_block, new_block))
           PY
 
       - name: Cai dat XcodeGen (neu chua co)
