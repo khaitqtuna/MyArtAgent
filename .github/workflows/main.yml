@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CACHE_VERSION: v5
+  CACHE_VERSION: v6
 
 jobs:
   build:
@@ -48,6 +48,45 @@ jobs:
           python3 - <<'PY'
           import pathlib
 
+          # 1. Patch VAE.swift de eval & clearCache sau tung block do phan giai cao, tranh tran RAM Metal luc decode
+          vae_path = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/VAE.swift")
+          vae_text = vae_path.read_text()
+
+          old_ed_block = "\n".join([
+              "        for resnet in resnets {",
+              "            x = resnet(x)",
+              "        }",
+          ])
+          new_ed_block = "\n".join([
+              "        for resnet in resnets {",
+              "            x = resnet(x)",
+              "            if x.dim(1) >= 256 {",
+              "                eval(x)",
+              "                Memory.clearCache()",
+              "            }",
+              "        }",
+          ])
+          if old_ed_block in vae_text and "x.dim(1) >= 256" not in vae_text:
+              vae_text = vae_text.replace(old_ed_block, new_ed_block)
+
+          old_decoder_call = "\n".join([
+              "        for l in upBlocks {",
+              "            x = l(x)",
+              "        }",
+          ])
+          new_decoder_call = "\n".join([
+              "        for l in upBlocks {",
+              "            x = l(x)",
+              "            eval(x)",
+              "            Memory.clearCache()",
+              "        }",
+          ])
+          if old_decoder_call in vae_text and "for l in upBlocks {\n            x = l(x)\n            eval(x)" not in vae_text:
+              vae_text = vae_text.replace(old_decoder_call, new_decoder_call)
+
+          vae_path.write_text(vae_text)
+
+          # 2. Patch Load.swift voi DecoderOnlyAutoencoder, autoreleasepool moi buoc, va 3 pha tuan tu
           load_path = pathlib.Path("mlx-swift-examples/Libraries/StableDiffusion/Load.swift")
           load_text = load_path.read_text()
 
@@ -65,13 +104,16 @@ jobs:
               "func loadWeights(",
               "    url: URL, model: Module, mapper: (String, MLXArray) -> [(String, MLXArray)], dType: DType",
               ") throws {",
-              "    do {",
+              "    try autoreleasepool {",
               "        let raw = try loadArrays(url: url)",
               "        var weights: [(String, MLXArray)] = []",
               "        weights.reserveCapacity(raw.count)",
               "        for (k, v) in raw {",
-              "            let casted = v.dtype == dType ? v : v.asType(dType)",
-              "            weights.append(contentsOf: mapper(k, casted))",
+              "            let mapped = mapper(k, v)",
+              "            if mapped.isEmpty { continue }",
+              "            for (mk, mv) in mapped {",
+              "                weights.append((mk, mv.dtype == dType ? mv : mv.asType(dType)))",
+              "            }",
               "        }",
               "        try model.update(parameters: ModuleParameters.unflattened(weights), verify: .none)",
               "    }",
@@ -81,7 +123,7 @@ jobs:
           if old_load_weights in load_text:
               load_text = load_text.replace(old_load_weights, new_load_weights)
 
-          if "runLowMemorySequence(" not in load_text:
+          if "DecoderOnlyAutoencoder" not in load_text:
               addition = """
           public struct SequencePromptItem: Sendable {
               public let prompt: String
@@ -93,6 +135,50 @@ jobs:
                   self.negativePrompt = negativePrompt
                   self.seed = seed
               }
+          }
+
+          private final class DecoderOnlyAutoencoder: Module {
+              let scalingFactor: Float
+              let decoder: VADecoder
+              @ModuleInfo(key: "post_quant_proj") var postQuantProjection: Linear
+
+              init(configuration: AutoencoderConfiguration) {
+                  self.scalingFactor = configuration.scalingFactor
+                  self.decoder = VADecoder(
+                      inputChannels: configuration.latentChannelsIn,
+                      outputChannels: configuration.outputChannels,
+                      blockOutChannels: configuration.blockOutChannels,
+                      layersPerBlock: configuration.layersPerBlock + 1,
+                      resnetGroups: configuration.normNumGroups)
+                  self._postQuantProjection.wrappedValue = Linear(
+                      configuration.latentChannelsIn, configuration.latentChannelsIn)
+              }
+
+              func decode(_ z: MLXArray) -> MLXArray {
+                  let zScaled = z.asType(.float32) / scalingFactor
+                  return decoder(postQuantProjection(zScaled))
+              }
+          }
+
+          private func loadDecoderOnlyAutoEncoder(
+              client: HubClient, configuration: StableDiffusionConfiguration
+          ) throws -> DecoderOnlyAutoencoder {
+              let vaeConfig = try loadConfiguration(
+                  client: client, configuration: configuration, key: .vaeConfig,
+                  type: AutoencoderConfiguration.self)
+              let model = DecoderOnlyAutoencoder(configuration: vaeConfig)
+              let weightsURL = try resolve(client: client, configuration: configuration, key: .vaeWeights)
+              try loadWeights(
+                  url: weightsURL,
+                  model: model,
+                  mapper: { key, value in
+                      if key.hasPrefix("encoder.") || key.hasPrefix("quant_conv") {
+                          return []
+                      }
+                      return vaeRemap(key: key, value: value)
+                  },
+                  dType: .float32)
+              return model
           }
 
           extension StableDiffusionConfiguration {
@@ -184,7 +270,7 @@ jobs:
                   return MLXArray(flat).reshaped(count, maxLen)
               }
 
-              /// Chạy tuần tự 3 pha (TextEncoder -> UNet -> VAE), giải phóng hoàn toàn từng pha khỏi RAM.
+              /// Chạy tuần tự 3 pha (TextEncoder -> UNet -> Decoder-only VAE), giải phóng hoàn toàn từng pha & autoreleasepool.
               public func runLowMemorySequence(
                   client: HubClient = .default,
                   items: [SequencePromptItem],
@@ -206,7 +292,7 @@ jobs:
                   // PHA 1: Nạp Text Encoder, mã hóa toàn bộ prompt rồi giải phóng hoàn toàn
                   var encodedPrompts: [(conditioning: MLXArray, pooled: MLXArray?)] = []
                   onProgress("Pha 1/3: Đang nạp Text Encoder...")
-                  do {
+                  try autoreleasepool {
                       let tokenizer1 = try loadTokenizer(client: client, configuration: self)
                       var te1: CLIPTextModel? = try loadTextEncoder(client: client, configuration: self, dType: dType)
                       quantize(model: te1!, filter: { _, m in m is Linear })
@@ -229,22 +315,24 @@ jobs:
 
                       onProgress("Pha 1/3: Đang mã hóa \\(items.count) câu lệnh...")
                       for item in items {
-                          let neg: String? = cfgWeight > 1 ? item.negativePrompt : nil
-                          let tokens1 = Self.tokenizePair(tokenizer: tokenizer1, text: item.prompt, negativeText: neg)
-                          let out1 = te1!(tokens1)
-                          if isSDXL, let te2, let tokenizer2 {
-                              let tokens2 = Self.tokenizePair(tokenizer: tokenizer2, text: item.prompt, negativeText: neg)
-                              let out2 = te2(tokens2)
-                              let cond = concatenated(
-                                  [out1.hiddenStates.dropLast().last!, out2.hiddenStates.dropLast().last!],
-                                  axis: -1)
-                              let pooled = out2.pooledOutput
-                              eval(cond, pooled)
-                              encodedPrompts.append((cond, pooled))
-                          } else {
-                              let cond = out1.lastHiddenState
-                              eval(cond)
-                              encodedPrompts.append((cond, nil))
+                          autoreleasepool {
+                              let neg: String? = cfgWeight > 1 ? item.negativePrompt : nil
+                              let tokens1 = Self.tokenizePair(tokenizer: tokenizer1, text: item.prompt, negativeText: neg)
+                              let out1 = te1!(tokens1)
+                              if isSDXL, let te2, let tokenizer2 {
+                                  let tokens2 = Self.tokenizePair(tokenizer: tokenizer2, text: item.prompt, negativeText: neg)
+                                  let out2 = te2(tokens2)
+                                  let cond = concatenated(
+                                      [out1.hiddenStates.dropLast().last!, out2.hiddenStates.dropLast().last!],
+                                      axis: -1)
+                                  let pooled = out2.pooledOutput
+                                  eval(cond, pooled)
+                                  encodedPrompts.append((cond, pooled))
+                              } else {
+                                  let cond = out1.lastHiddenState
+                                  eval(cond)
+                                  encodedPrompts.append((cond, nil))
+                              }
                           }
                           Memory.clearCache()
                       }
@@ -257,7 +345,7 @@ jobs:
                   // PHA 2: Nạp UNet đơn lẻ, tạo toàn bộ latent (~128 KB/ảnh) rồi giải phóng UNet hoàn toàn
                   var latentsOut: [MLXArray] = []
                   onProgress("Pha 2/3: Đang nạp UNet (\\(unetBits)-bit tiết kiệm RAM)...")
-                  do {
+                  try autoreleasepool {
                       var unet: UNetModel? = try loadUnet(client: client, configuration: self, dType: dType)
                       quantize(model: unet!, groupSize: 32, bits: unetBits)
                       eval(unet!)
@@ -293,15 +381,17 @@ jobs:
                                   ? "Ảnh \\(frameNum)/\\(items.count) — bước \\(stepIdx + 1)/\\(steps)..."
                                   : "Đang vẽ bước \\(stepIdx + 1)/\\(steps)...")
 
-                              let xtUnet = cfgWeight > 1 ? concatenated([xt, xt], axis: 0) : xt
-                              let tUnet = broadcast(t, to: [xtUnet.count])
-                              var epsPred = unet!(xtUnet, timestep: tUnet, encoderX: encoded.conditioning, textTime: textTime)
-                              if cfgWeight > 1 {
-                                  let (epsText, epsNeg) = epsPred.split()
-                                  epsPred = epsNeg + cfgWeight * (epsText - epsNeg)
+                              autoreleasepool {
+                                  let xtUnet = cfgWeight > 1 ? concatenated([xt, xt], axis: 0) : xt
+                                  let tUnet = broadcast(t, to: [xtUnet.count])
+                                  var epsPred = unet!(xtUnet, timestep: tUnet, encoderX: encoded.conditioning, textTime: textTime)
+                                  if cfgWeight > 1 {
+                                      let (epsText, epsNeg) = epsPred.split()
+                                      epsPred = epsNeg + cfgWeight * (epsText - epsNeg)
+                                  }
+                                  xt = sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)
+                                  eval(xt)
                               }
-                              xt = sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)
-                              eval(xt)
                               Memory.clearCache()
                           }
                           latentsOut.append(xt)
@@ -310,11 +400,12 @@ jobs:
                   }
                   encodedPrompts.removeAll()
                   Memory.clearCache()
+                  Thread.sleep(forTimeInterval: 0.25)
 
-                  // PHA 3: Nạp riêng VAE sau khi UNet đã giải phóng, giải mã từng ảnh một
+                  // PHA 3: Chỉ nạp Decoder của VAE (không nạp VAEncoder), giải mã từng block/ảnh một
                   onProgress("Pha 3/3: Đang nạp bộ giải mã VAE...")
-                  do {
-                      var vae: Autoencoder? = try loadAutoEncoder(client: client, configuration: self, dType: .float32)
+                  try autoreleasepool {
+                      var vae: DecoderOnlyAutoencoder? = try loadDecoderOnlyAutoEncoder(client: client, configuration: self)
                       eval(vae!)
                       Memory.clearCache()
 
@@ -322,11 +413,13 @@ jobs:
                           onProgress(items.count > 1
                               ? "Pha 3/3: Đang giải mã ảnh \\(idx + 1)/\\(items.count)..."
                               : "Đang hoàn thiện chi tiết ảnh...")
-                          var decoded: MLXArray? = vae!.decode(latent)
-                          decoded = clip(decoded! / 2 + 0.5, min: 0, max: 1)
-                          eval(decoded!)
-                          try onDecodedImage(idx, decoded!)
-                          decoded = nil
+                          try autoreleasepool {
+                              var decoded: MLXArray? = vae!.decode(latent)
+                              decoded = clip(decoded! / 2 + 0.5, min: 0, max: 1)
+                              eval(decoded!)
+                              try onDecodedImage(idx, decoded!)
+                              decoded = nil
+                          }
                           Memory.clearCache()
                       }
                       vae = nil

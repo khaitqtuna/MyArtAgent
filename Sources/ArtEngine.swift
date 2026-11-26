@@ -374,8 +374,11 @@ final class ArtEngine: ObservableObject {
         lockSequenceSeed: Bool,
         lowRAMMode: Bool
     ) async throws {
-        // Ép giới hạn cache GPU xuống 20 MB để tránh bị iPadOS Jetsam kill app
+        // Ép giới hạn cache GPU xuống 20 MB và giới hạn tổng bộ nhớ khi bật chế độ tiết kiệm RAM
         Memory.cacheLimit = 20 * 1024 * 1024
+        if lowRAMMode {
+            Memory.memoryLimit = 3_400 * 1024 * 1024
+        }
         Memory.clearCache()
         defer { Memory.clearCache() }
 
@@ -457,25 +460,20 @@ final class ArtEngine: ObservableObject {
         let width = imageArray.shape[1]
         let channels = imageArray.shape[2]
 
-        let floats = imageArray.asType(.float32).asArray(Float.self)
-        let maxValue = floats.lazy.filter(\.isFinite).max() ?? 1.0
-        let scale: Float = maxValue <= 1.5 ? 255.0 : 1.0
-
-        func toByte(_ value: Float) -> UInt8 {
-            guard value.isFinite else { return 0 }
-            return UInt8(min(max(value * scale, 0), 255))
-        }
+        let scaled = clip(imageArray.asType(.float32) * 255.0, min: 0, max: 255).asType(.uint8)
+        eval(scaled)
+        let pixels = scaled.asArray(UInt8.self)
 
         var rgba = [UInt8](repeating: 255, count: width * height * 4)
         for i in 0 ..< (width * height) {
             let src = i * channels
             let dst = i * 4
             if channels >= 3 {
-                rgba[dst] = toByte(floats[src])
-                rgba[dst + 1] = toByte(floats[src + 1])
-                rgba[dst + 2] = toByte(floats[src + 2])
+                rgba[dst] = pixels[src]
+                rgba[dst + 1] = pixels[src + 1]
+                rgba[dst + 2] = pixels[src + 2]
             } else {
-                let gray = toByte(floats[src])
+                let gray = pixels[src]
                 rgba[dst] = gray
                 rgba[dst + 1] = gray
                 rgba[dst + 2] = gray
