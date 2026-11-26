@@ -140,9 +140,9 @@ jobs:
               "        )",
           ])
           new_block = "\n".join([
-              "        let targetH = Float(parameters.latentSize[0] * 8)",
-              "        let targetW = Float(parameters.latentSize[1] * 8)",
-              "        let timeIds: [Float] = [targetH, targetW, 0.0, 0.0, targetH, targetW]",
+              "        let targetH = Double(parameters.latentSize[0] * 8)",
+              "        let targetW = Double(parameters.latentSize[1] * 8)",
+              "        let timeIds: [Double] = [targetH, targetW, 0.0, 0.0, targetH, targetW]",
               "        let textTime = (",
               "            pooledConditioning,",
               "            repeated(",
