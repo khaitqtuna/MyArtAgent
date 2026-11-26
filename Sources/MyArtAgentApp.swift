@@ -54,10 +54,8 @@ struct ContentView: View {
 
                     if useLLM {
                         DisclosureGroup("Tùy chỉnh mô hình LLM (Danh sách chọn sẵn)") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text("Chế độ phối hợp:")
-                                    Spacer()
+                            VStack(alignment: .leading, spacing: 12) {
+                                LabeledContent("Chế độ phối hợp") {
                                     Picker("Chế độ phối hợp", selection: $llmPipelineMode) {
                                         ForEach(LLMPipelineMode.allCases) { mode in
                                             Text(mode.rawValue).tag(mode)
@@ -66,9 +64,7 @@ struct ContentView: View {
                                     .pickerStyle(.menu)
                                 }
 
-                                HStack {
-                                    Text(llmPipelineMode == .dualEnsemble ? "LLM 1 (Dịch & Lập ý):" : "Mô hình LLM:")
-                                    Spacer()
+                                LabeledContent(llmPipelineMode == .dualEnsemble ? "LLM 1 (Dịch & Lập ý)" : "Mô hình LLM") {
                                     Picker("LLM chính", selection: $primaryLLM) {
                                         ForEach(LLMModelPreset.allCases) { model in
                                             Text(model.displayName).tag(model)
@@ -78,9 +74,7 @@ struct ContentView: View {
                                 }
 
                                 if llmPipelineMode == .dualEnsemble {
-                                    HStack {
-                                        Text("LLM 2 (Kiểm lỗi & Tinh chỉnh):")
-                                        Spacer()
+                                    LabeledContent("LLM 2 (Kiểm lỗi)") {
                                         Picker("LLM tinh chỉnh", selection: $refinerLLM) {
                                             ForEach(LLMModelPreset.allCases) { model in
                                                 Text(model.displayName).tag(model)
@@ -93,8 +87,9 @@ struct ContentView: View {
                                 Text("Các LLM chạy tuần tự từng mô hình rồi giải phóng RAM hoàn toàn trước khi vẽ để tránh vượt trần RAM iPadOS.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            .padding(.top, 6)
+                            .padding(.top, 8)
                         }
                         .font(.subheadline)
                     }

@@ -4,10 +4,10 @@ import MLXLLM
 import MLXLMCommon
 
 enum LLMModelPreset: String, CaseIterable, Identifiable {
-    case qwen35_4B = "mlx-community/Qwen3.5-4B-MLX-4bit"
     case qwen3_4B = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
     case phi4Mini = "mlx-community/Phi-4-mini-instruct-4bit"
-    case gemma3_4B = "mlx-community/gemma-3-4b-it-4bit"
+    case gemma3_4B = "mlx-community/gemma-3-4b-it-qat-4bit"
+    case qwen35_4B = "mlx-community/Qwen3.5-4B-MLX-4bit"
     case llama32_3B = "mlx-community/Llama-3.2-3B-Instruct-4bit"
     case gemma2_2B = "mlx-community/gemma-2-2b-it-4bit"
     case qwen25_7B = "mlx-community/Qwen2.5-7B-Instruct-4bit"
@@ -16,26 +16,26 @@ enum LLMModelPreset: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .qwen35_4B:
-            return "Qwen 3.5 4B (~2.8 GB • Thông minh nhất)"
         case .qwen3_4B:
-            return "Qwen 3 4B Instruct (~2.1 GB • Dịch Việt/Anh chuẩn)"
+            return "Qwen 3 4B (2.1 GB • Dịch chuẩn)"
         case .phi4Mini:
-            return "Phi-4 Mini (~2.0 GB • Kiểm lỗi chặt, ít bịa)"
+            return "Phi-4 Mini (2.0 GB • Kiểm lỗi chặt)"
         case .gemma3_4B:
-            return "Gemma 3 4B IT (~3.2 GB • Mượt & giàu chi tiết)"
+            return "Gemma 3 4B QAT (2.8 GB • Mượt)"
+        case .qwen35_4B:
+            return "Qwen 3.5 4B (2.8 GB • Mới nhất)"
         case .llama32_3B:
-            return "Llama 3.2 3B (~1.7 GB • Nhẹ & nhanh)"
+            return "Llama 3.2 3B (1.7 GB • Nhẹ nhanh)"
         case .gemma2_2B:
-            return "Gemma 2 2B (~1.4 GB • Siêu nhẹ RAM)"
+            return "Gemma 2 2B (1.4 GB • Siêu nhẹ)"
         case .qwen25_7B:
-            return "Qwen 2.5 7B (~4.0 GB • Cần iPad RAM cao)"
+            return "Qwen 2.5 7B (4.0 GB • RAM cao)"
         }
     }
 }
 
 enum LLMPipelineMode: String, CaseIterable, Identifiable {
-    case dualEnsemble = "Kết hợp 2 LLM (Dịch & Lập ý → Kiểm lỗi & Tinh chỉnh)"
+    case dualEnsemble = "Kết hợp 2 LLM (Dịch → Kiểm lỗi)"
     case single = "1 LLM đơn (Nhanh)"
 
     var id: String { rawValue }
